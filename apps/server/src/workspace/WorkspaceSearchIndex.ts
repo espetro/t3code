@@ -1,16 +1,3 @@
-import * as NodeModule from "node:module";
-
-import type {
-  DirItem,
-  DirSearchResult,
-  FileItem,
-  FileFinder as FileFinderType,
-  GrepCursor,
-  MixedItem,
-  MixedSearchResult,
-  Result,
-  SearchResult,
-} from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -27,9 +14,18 @@ import type {
 } from "@t3tools/contracts";
 import { isProjectFaviconPath } from "@t3tools/shared/projectFavicon";
 
-// fff-node's native library stays external; single-executables require disk packages instead of importing them.
-const requireForFff = NodeModule.createRequire(import.meta.url);
-const { FileFinder } = requireForFff("@ff-labs/fff-node") as typeof import("@ff-labs/fff-node");
+import {
+  FileFinder,
+  type DirItem,
+  type DirSearchResult,
+  type FileItem,
+  type FileFinderType,
+  type GrepCursor,
+  type MixedItem,
+  type MixedSearchResult,
+  type Result,
+  type SearchResult,
+} from "./workspaceFileFinder.ts";
 
 const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
 const WORKSPACE_INDEX_PAGE_SIZE = WORKSPACE_INDEX_MAX_ENTRIES + 2;

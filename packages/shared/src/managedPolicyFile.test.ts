@@ -17,6 +17,7 @@ import {
   WindowsRegistry,
   WindowsRegistryError,
 } from "./managedPolicyFile.ts";
+import { loadFfiRs } from "./nativeFfi.ts";
 
 const policy = JSON.stringify({ schemaVersion: 1, organization: "Example Corp" });
 
@@ -185,6 +186,6 @@ describe("readManagedPolicy", () => {
           const error = yield* registry.readMachineString(key, value).pipe(Effect.flip);
           assert.equal(error.code, 1630);
         }
-      }).pipe(Effect.provide(layerWindowsRegistry(() => import("ffi-rs")))),
+      }).pipe(Effect.provide(layerWindowsRegistry(loadFfiRs))),
   );
 });

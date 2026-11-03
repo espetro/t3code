@@ -24,6 +24,7 @@ import {
   readManagedPolicy,
   readManagedPolicyFile,
 } from "@t3tools/shared/managedPolicyFile";
+import { requireFfiRs } from "@t3tools/shared/nativeFfi";
 
 import { telemetryChannel } from "../config.ts";
 import * as ManagedLimits from "./managedLimits.ts";
@@ -206,9 +207,7 @@ const make = Effect.gen(function* () {
 const requireForFfi = NodeModule.createRequire(import.meta.url);
 
 export const layer = Layer.effect(ManagedPolicy, make).pipe(
-  Layer.provide(
-    layerWindowsRegistry(async () => requireForFfi("ffi-rs") as typeof import("ffi-rs")),
-  ),
+  Layer.provide(layerWindowsRegistry(async () => requireFfiRs(requireForFfi))),
 );
 
 /** A policy for tests; `undefined` means unmanaged. */

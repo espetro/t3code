@@ -1,10 +1,11 @@
 import {
   FileFinder,
+  type FileFinderType,
   type FileItem,
   type GrepCursor,
   type GrepOptions,
   type GrepResult,
-} from "@ff-labs/fff-node";
+} from "./workspaceFileFinder.ts";
 import { afterEach, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
@@ -48,7 +49,7 @@ it.effect("filters image searches before applying the result limit", () =>
         destroy: vi.fn(),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         fileSearch,
-      } as unknown as FileFinder;
+      } as unknown as FileFinderType;
       vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
 
       const searchIndex = yield* WorkspaceSearchIndex.make("/workspace/project");
@@ -111,7 +112,7 @@ it.effect("continues whole-word searches after a filtered grep page", () =>
         destroy: vi.fn(),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         grep,
-      } as unknown as FileFinder;
+      } as unknown as FileFinderType;
       vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
 
       const searchIndex = yield* WorkspaceSearchIndex.make("/workspace/project", "content");
