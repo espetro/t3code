@@ -1,8 +1,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as NodeDns from "node:dns";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
-import * as NodeSea from "node:sea";
 
 export const Platform = Context.Reference<NodeJS.Platform>("@t3tools/shared/HostProcess/Platform", {
   defaultValue: () => process.platform,
@@ -70,8 +70,20 @@ export const InvokedAs = Context.Reference<string>("@t3tools/shared/HostProcess/
 });
 
 export const IsExecutable = Context.Reference<boolean>("@t3tools/shared/HostProcess/IsExecutable", {
-  defaultValue: () => NodeSea.isSea(),
+  defaultValue: () => isStandaloneExecutable(),
 });
+
+function isStandaloneExecutable(): boolean {
+  try {
+    // Dynamic specifier: ScriptC has no `node:sea`, and a compiled binary replaces SEA.
+    const sea = NodeModule.createRequire(import.meta.url)(`node:${"sea"}`) as {
+      isSea?: () => boolean;
+    };
+    return sea.isSea?.() === true;
+  } catch {
+    return false;
+  }
+}
 
 /** Includes hostname-resolved addresses absent from interfaces, such as Debian's 127.0.1.1 used by Firefox locks. */
 export const Addresses = Context.Reference<Effect.Effect<ReadonlySet<string>>>(
