@@ -667,6 +667,19 @@ Checklist:
    - release job uploads expected files
 5. Smoke test downloaded artifacts.
 
+## ScriptC native prereleases
+
+ACP fast-path ELFs (`acp-mcp-bridge`, `acp-mcp-call`) are a separate train from desktop/CLI
+archives. They do not use `vX.Y.Z` tags.
+
+1. From the commit to test: `git tag scriptc-v0.1.6-native.1 && git push origin scriptc-v0.1.6-native.1`
+2. `.github/workflows/scriptc-native.yml` runs `vp run --filter t3 build:scriptc -- --exec --outdir dist-scriptc`
+3. If `scriptc` is not on PATH, the job succeeds and **does not** open a GitHub Release
+4. If binaries exist, they attach to a GitHub **prerelease** named `Native t3code-server <tag>`
+5. `workflow_dispatch` without a tag only uploads Actions artifacts
+
+Until ScriptC can compile those entries, step 3 is the expected outcome.
+
 ## 5) Troubleshooting
 
 - macOS build unsigned when expected signed:
