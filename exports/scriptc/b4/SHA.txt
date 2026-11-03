@@ -1,0 +1,4 @@
+branch: cursor/branded-map-keys-4eae
+commit: 4c5aff9171dba01e95f20e4fbbb9ed7f45a64120
+base:   2569b74055df505506323e51ca0eb730b903ae5f  (vercel-labs/scriptc origin/main at export)
+issue:  https://github.com/vercel-labs/scriptc/issues/2912

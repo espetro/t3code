@@ -1,0 +1,280 @@
+From 4c5aff9171dba01e95f20e4fbbb9ed7f45a64120 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 3 Nov 2026 07:20:39 +0000
+Subject: [PATCH] fix(compiler): treat nested brand tables as primitive Map
+ keys
+
+Effect Schema brands are string & Brand<"Name">, where Brand is a nested
+phantom marker object, not a flat { __brand } intersection. Erase those
+nested marker tables to the underlying primitive so Map/Set keys type-check
+the same as string/number/bigint/boolean.
+
+Fixes #2912
+---
+ .../compiler/src/diagnostics/diagnostic.ts    |  2 +-
+ packages/compiler/src/frontend/type-mapper.ts | 79 +++++++++++++------
+ .../compiler/test/collection-keys.test.ts     | 57 +++++++++++++
+ .../tests/corpus/branded-map-keys.ts.json     |  6 ++
+ tests/corpus/branded-map-keys.ts              | 33 ++++++++
+ .../corpus-costs/branded-map-keys.ts.json     |  1 +
+ 6 files changed, 153 insertions(+), 25 deletions(-)
+ create mode 100644 packages/compiler/test/ts7/baselines/order-parity/tests/corpus/branded-map-keys.ts.json
+ create mode 100644 tests/corpus/branded-map-keys.ts
+ create mode 100644 tests/harness/corpus-costs/branded-map-keys.ts.json
+
+diff --git a/packages/compiler/src/diagnostics/diagnostic.ts b/packages/compiler/src/diagnostics/diagnostic.ts
+index 67ca4f22a..f55df7343 100644
+--- a/packages/compiler/src/diagnostics/diagnostic.ts
++++ b/packages/compiler/src/diagnostics/diagnostic.ts
+@@ -1135,7 +1135,7 @@ export function overloadedSignatureTypeDiag(typeText: string, loc: SrcLoc): ScrD
+ /** An intersection type that resolved to no lowering. The intersections
+  * that DO compile never reach this: object-member intersections resolve
+  * through the record path (`A & B` interns the combined shape), branded
+- * primitives erase their literal marker shapes, function-with-properties
++ * primitives erase their literal and nested marker shapes, function-with-properties
+  * hybrids map to `%call` records, and mixin-instantiation intersections
+  * resolve by chain structure to their pinned instantiation. What lands here
+  * is the remainder — an intersection part outside those rules, or a mixin
+diff --git a/packages/compiler/src/frontend/type-mapper.ts b/packages/compiler/src/frontend/type-mapper.ts
+index ae99d550e..8098c733f 100644
+--- a/packages/compiler/src/frontend/type-mapper.ts
++++ b/packages/compiler/src/frontend/type-mapper.ts
+@@ -8041,10 +8041,13 @@ function mapErrorMetadataIntersection(type: ts.Type, ctx: TypeMapperCtx): IrType
+ 
+ /** A conventional primitive brand has one runtime-carrying primitive part
+  * and one or more phantom object parts whose fields are literal marker
+- * values. The marker can use a string or unique-symbol key, can be imported
+- * from a declaration file, and can be expressed through a generic alias;
+- * none of those facts changes the runtime value. Empty `{}` refinements are
+- * the marker-free form of the same primitive narrowing.
++ * values, or nested objects of the same marker shape. Effect Schema's
++ * `string & Brand<"Id">` is `{ readonly ["~effect/Brand"]: { readonly Id: "Id" } }`
++ * beside the primitive; the nested table is type-level only. The marker
++ * can use a string or unique-symbol key, can be imported from a
++ * declaration file, and can be expressed through a generic alias; none of
++ * those facts changes the runtime value. Empty `{}` refinements are the
++ * marker-free form of the same primitive narrowing.
+  *
+  * Arbitrary primitive/object intersections do not erase here. A companion
+  * with a class identity, call/construct/index signature, accessor, or a
+@@ -8076,7 +8079,8 @@ function mapBrandedPrimitiveIntersection(widened: ts.Type, ctx: TypeMapperCtx):
+     }
+     return null;
+   };
+-  const markerValue = (value: ts.Type): boolean => {
++  const markerValue = (value: ts.Type, seen: Set<ts.Type>): boolean => {
++    if (seen.has(value)) return true;
+     if (
+       value.flags &
+       (ts.TypeFlags.StringLiteral |
+@@ -8092,15 +8096,57 @@ function mapBrandedPrimitiveIntersection(widened: ts.Type, ctx: TypeMapperCtx):
+     ) {
+       return true;
+     }
+-    if (value.isUnionType()) return ts.constituentTypes(value).every(markerValue);
++    if (value.isUnionType())
++      return ts.constituentTypes(value).every((arm) => markerValue(arm, seen));
+     if (value.flags & ts.TypeFlags.TypeParameter) {
+       const bound = resolveTypeParamTs?.(value) ?? null;
+       if (bound) {
+         contextResolutions++;
+-        return markerValue(bound);
++        return markerValue(bound, seen);
+       }
+     }
+-    return false;
++    // Number/string/boolean/bigint/symbol companions are runtime data, not
++    // nested brand tables. Their interface members must not look empty.
++    if (
++      value.flags &
++      (ts.TypeFlags.Number |
++        ts.TypeFlags.String |
++        ts.TypeFlags.Boolean |
++        ts.TypeFlags.BigInt |
++        ts.TypeFlags.ESSymbol |
++        ts.TypeFlags.Any |
++        ts.TypeFlags.Unknown |
++        ts.TypeFlags.NonPrimitive)
++    ) {
++      return false;
++    }
++    return isPhantomBrandObject(value, seen);
++  };
++  const isPhantomBrandObject = (part: ts.Type, seen: Set<ts.Type>): boolean => {
++    const partSym = part.getSymbol();
++    if (
++      (part.flags & ts.TypeFlags.Object) === 0 ||
++      (part.flags &
++        (ts.TypeFlags.Number |
++          ts.TypeFlags.String |
++          ts.TypeFlags.Boolean |
++          ts.TypeFlags.BigInt |
++          ts.TypeFlags.ESSymbol)) !==
++        0 ||
++      checker.getCallSignatures(part).length > 0 ||
++      checker.getConstructSignatures(part).length > 0 ||
++      (partSym !== undefined && (partSym.flags & ts.SymbolFlags.Class) !== 0)
++    ) {
++      return false;
++    }
++    if (checker.getIndexInfosOfType(part).length > 0) return false;
++    seen.add(part);
++    const props = checker.getPropertiesOfType(part);
++    return props.every(
++      (prop) =>
++        (prop.flags & (ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor)) === 0 &&
++        markerValue(checker.getTypeOfSymbol(prop), seen),
++    );
+   };
+   let primitive: IrType | null = null;
+   let markerParts = 0;
+@@ -8111,22 +8157,7 @@ function mapBrandedPrimitiveIntersection(widened: ts.Type, ctx: TypeMapperCtx):
+       primitive = mappedPrimitive;
+       continue;
+     }
+-    const partSym = part.getSymbol();
+-    const props = checker.getPropertiesOfType(part);
+-    if (
+-      (part.flags & ts.TypeFlags.Object) === 0 ||
+-      checker.getCallSignatures(part).length > 0 ||
+-      checker.getConstructSignatures(part).length > 0 ||
+-      checker.getIndexInfosOfType(part).length > 0 ||
+-      (partSym !== undefined && (partSym.flags & ts.SymbolFlags.Class) !== 0) ||
+-      props.some(
+-        (prop) =>
+-          (prop.flags & (ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor)) !== 0 ||
+-          !markerValue(checker.getTypeOfSymbol(prop)),
+-      )
+-    ) {
+-      return null;
+-    }
++    if (!isPhantomBrandObject(part, new Set())) return null;
+     markerParts++;
+   }
+   return primitive && markerParts > 0 ? primitive : null;
+diff --git a/packages/compiler/test/collection-keys.test.ts b/packages/compiler/test/collection-keys.test.ts
+index db5d3a564..cecfc4988 100644
+--- a/packages/compiler/test/collection-keys.test.ts
++++ b/packages/compiler/test/collection-keys.test.ts
+@@ -190,3 +190,60 @@ test.each(["map", "set"] as const)("validator checks the arms behind a %s key un
+     ),
+   ).toBe(true);
+ });
++
++function analyzeSource(source: string) {
++  const dir = mkdtempSync(join(tmpdir(), "scriptc-branded-keys-"));
++  try {
++    const entry = join(dir, "main.ts");
++    writeFileSync(entry, source);
++    const { coverage } = analyze(entry, {});
++    expect(coverage.preflightFailed).toBe(false);
++    return coverage.diagnostics;
++  } finally {
++    rmSync(dir, { recursive: true, force: true });
++  }
++}
++
++test("literal-marker branded primitives are Map keys and Set elements", () => {
++  const diagnostics = analyzeSource(`
++    type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
++    type UserId = Brand<string, "UserId">;
++    const ids = new Map<UserId, number>();
++    const id = "ada" as UserId;
++    ids.set(id, 1);
++    console.log(ids.get(id), ids.has(id));
++    const seen = new Set<UserId>([id]);
++    console.log(seen.has(id));
++  `);
++  expect(diagnostics).toEqual([]);
++});
++
++test("nested Effect-style brand tables are Map keys", () => {
++  const diagnostics = analyzeSource(`
++    const BrandTypeId = "~effect/Brand";
++    interface Brand<Keys extends string> {
++      readonly [BrandTypeId]: { readonly [K in Keys]: Keys };
++    }
++    type DriverKind = string & Brand<"ProviderDriverKind">;
++    const byKind = new Map<DriverKind, number>();
++    const kind = "codex" as DriverKind;
++    byKind.set(kind, 1);
++    console.log(byKind.get(kind));
++  `);
++  expect(diagnostics).toEqual([]);
++});
++
++test("unique-symbol nested brands are Map keys", () => {
++  const diagnostics = analyzeSource(`
++    declare const BrandTypeId: unique symbol;
++    interface Brand<Keys extends string> {
++      readonly [BrandTypeId]: { readonly [K in Keys]: typeof BrandTypeId };
++    }
++    type ThreadId = string & Brand<"ThreadId">;
++    const threads = new Map<ThreadId, string>();
++    const id = "t1" as ThreadId;
++    threads.set(id, "ok");
++    console.log(threads.get(id));
++  `);
++  expect(diagnostics).toEqual([]);
++});
+diff --git a/packages/compiler/test/ts7/baselines/order-parity/tests/corpus/branded-map-keys.ts.json b/packages/compiler/test/ts7/baselines/order-parity/tests/corpus/branded-map-keys.ts.json
+new file mode 100644
+index 000000000..2cec61719
+--- /dev/null
++++ b/packages/compiler/test/ts7/baselines/order-parity/tests/corpus/branded-map-keys.ts.json
+@@ -0,0 +1,6 @@
++{
++ "order": [
++  "<repo>/tests/corpus/branded-map-keys.ts"
++ ],
++ "diags": []
++}
+diff --git a/tests/corpus/branded-map-keys.ts b/tests/corpus/branded-map-keys.ts
+new file mode 100644
+index 000000000..802aa8eed
+--- /dev/null
++++ b/tests/corpus/branded-map-keys.ts
+@@ -0,0 +1,33 @@
++// Primitive brands are the underlying primitive as Map keys and Set
++// elements: the brand object is type-level only. Nested marker tables
++// (Effect Schema's Brand<"Name"> shape) erase the same way as a flat
++// `{ readonly __brand: "Name" }` marker.
++type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
++type UserId = Brand<string, "UserId">;
++
++const BrandTypeId = "~effect/Brand";
++interface NestedBrand<Keys extends string> {
++  readonly [BrandTypeId]: { readonly [K in Keys]: Keys };
++}
++type DriverKind = string & NestedBrand<"ProviderDriverKind">;
++
++declare const metersTag: unique symbol;
++interface SymbolBrand<Keys extends string> {
++  readonly [metersTag]: { readonly [K in Keys]: typeof metersTag };
++}
++type Sequence = number & SymbolBrand<"Sequence">;
++
++const users = new Map<UserId, number>();
++const ada = "ada" as UserId;
++users.set(ada, 1);
++users.set("lin" as UserId, 2);
++console.log(users.get(ada), users.has("lin" as UserId), users.size);
++
++const drivers = new Map<DriverKind, string>();
++const kind = "codex" as DriverKind;
++drivers.set(kind, "Codex");
++console.log(drivers.get(kind));
++
++const sequences = new Set<Sequence>([7 as Sequence]);
++sequences.add(8 as Sequence);
++console.log(sequences.has(7 as Sequence), sequences.size);
+diff --git a/tests/harness/corpus-costs/branded-map-keys.ts.json b/tests/harness/corpus-costs/branded-map-keys.ts.json
+new file mode 100644
+index 000000000..32b89760d
+--- /dev/null
++++ b/tests/harness/corpus-costs/branded-map-keys.ts.json
+@@ -0,0 +1 @@
++{ "plain": 2500, "san": 4000 }
+-- 
+2.43.0
+

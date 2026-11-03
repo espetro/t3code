@@ -1,0 +1,4 @@
+branch: cursor/http-server-meta-4eae
+commit: 5c01e3cb7651a084fc18e97b8f5b2902c3d4e5f6
+base:   2569b74055df505506323e51ca0eb730b903ae5f  (vercel-labs/scriptc origin/main at export)
+issue:  https://github.com/vercel-labs/scriptc/issues/2913
