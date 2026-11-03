@@ -14,7 +14,7 @@ const SCRIPTC_ENTRIES = [
 ] as const;
 
 /** scriptc's runtime pack ABI moves every release; the build only works against this one. */
-const SCRIPTC_PINNED_VERSION = "0.4.7";
+export const SCRIPTC_PINNED_VERSION = "0.4.7";
 
 const SKIPPED_MARKER = ".skipped";
 
@@ -38,6 +38,7 @@ function parseArgs(argv: ReadonlyArray<string>): {
   let outdir = NodePath.join(serverDir, "dist-scriptc");
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--") continue;
     if (arg === "--exec") {
       exec = true;
       continue;
@@ -141,7 +142,7 @@ function main(): void {
   for (const entry of entries) {
     const spawned = NodeChildProcess.spawnSync(
       binary,
-      ["build", entry.sourcePath, "--outfile", entry.outfile],
+      ["build", entry.sourcePath, "--out", entry.outfile],
       {
         cwd: serverDir,
         stdio: "inherit",

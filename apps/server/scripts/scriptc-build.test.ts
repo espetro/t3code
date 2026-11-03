@@ -63,6 +63,52 @@ it("fails --exec when the installed scriptc does not match the pin", () => {
   expect(NodeFS.existsSync(NodePath.join(outdir, "acp-mcp-bridge"))).toBe(false);
 });
 
+it("treats a bare -- as an argument separator, not an entry name", () => {
+  const outdir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-scriptc-build-"));
+  const result = run(["--", "--exec", "--outdir", outdir], {
+    SCRIPTC_BINARY: NodePath.join(outdir, "does-not-exist"),
+  });
+  expect(result.status).toBe(0);
+  expect(NodeFS.existsSync(NodePath.join(outdir, ".skipped"))).toBe(true);
+});
+
+it("invokes the pinned compiler with --out, the 0.4.7 output flag", () => {
+  const outdir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-scriptc-build-"));
+  const githubOutput = NodePath.join(outdir, "github-output");
+  const argsLog = NodePath.join(outdir, "args.log");
+  const fakeBin = NodePath.join(outdir, "scriptc");
+  NodeFS.writeFileSync(
+    fakeBin,
+    `#!/bin/sh
+if [ "$1" = "--version" ]; then echo 0.4.7; exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(argsLog)}
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--out" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+if [ -z "$out" ]; then echo "missing --out" >&2; exit 1; fi
+: > "$out"
+exit 0
+`,
+  );
+  NodeFS.chmodSync(fakeBin, 0o755);
+  const result = run(["--exec", "--outdir", outdir, "acp-mcp-call"], {
+    SCRIPTC_BINARY: fakeBin,
+    GITHUB_OUTPUT: githubOutput,
+  });
+  expect(result.status).toBe(0);
+  expect(NodeFS.readFileSync(argsLog, "utf8")).toContain("--out");
+  expect(NodeFS.readFileSync(argsLog, "utf8")).not.toContain("--outfile");
+  expect(NodeFS.existsSync(NodePath.join(outdir, "acp-mcp-call"))).toBe(true);
+  expect(JSON.parse(NodeFS.readFileSync(NodePath.join(outdir, "manifest.json"), "utf8"))).toEqual({
+    skipped: false,
+    scriptcVersion: "0.4.7",
+    files: [NodePath.join(outdir, "acp-mcp-call")],
+  });
+  expect(NodeFS.readFileSync(githubOutput, "utf8")).toContain("skipped=false");
+});
+
 it("skips --exec when scriptc cannot report its version", () => {
   const outdir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-scriptc-build-"));
   const githubOutput = NodePath.join(outdir, "github-output");
