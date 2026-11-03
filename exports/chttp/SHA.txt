@@ -1,0 +1,3 @@
+branch: cursor/chttp-scriptc-047-4eae
+commit: 3bdd9188ec7a7ce6d09ab3085d4efb337b20b17b
+base:   c13fe24ebdb63c0a4ba16e8688ae10589d547a06  (sigilco/chttp origin/main at export)
