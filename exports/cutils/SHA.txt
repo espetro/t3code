@@ -1,0 +1,3 @@
+branch: cursor/cutils-ffi-4eae
+commit: d6f72c833f53acaa22c6fba6c64f803724735528
+base:   25d2a1d9c660f768db10da6efa6b1e4a94390883  (sigilco/cutils origin/main at export)

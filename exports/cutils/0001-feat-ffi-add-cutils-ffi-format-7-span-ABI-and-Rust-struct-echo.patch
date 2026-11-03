@@ -1,0 +1,1831 @@
+From d6f72c833f53acaa22c6fba6c64f803724735528 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 3 Nov 2026 07:14:45 +0000
+Subject: [PATCH] feat(ffi): add @cutils/ffi format-7 span ABI and Rust struct
+ echo
+
+Ship the shared scriptc FFI spec sqlite already uses (ffi_format 7,
+length-delimited string/bytes, mutable-bytes out params, pointer as
+bigint) plus layout helpers and a repr(C) EchoPoint smoke that compiles
+to an ELF via scriptc 0.4.7.
+---
+ .agents/plans/2026-11-03-cutils-ffi.md  |  36 +++++
+ .changeset/little-ravens-end.md         |   5 +
+ .gitignore                              |   1 +
+ ARCHITECTURE.md                         |   2 +-
+ README.md                               |   1 +
+ docs/docmd.config.json                  |   4 +
+ docs/ffi.md                             |   5 +
+ docs/index.md                           |   2 +-
+ docs/packages.md                        |   1 +
+ docs/quickstart.md                      |   3 +-
+ package.json                            |   2 +-
+ packages/ffi/AGENTS.md                  |  40 +++++
+ packages/ffi/CHANGELOG.md               |   7 +
+ packages/ffi/LICENSE                    | 202 +++++++++++++++++++++++
+ packages/ffi/README.md                  |  47 ++++++
+ packages/ffi/ffi.json                   |  16 ++
+ packages/ffi/gate.ffi.json              |  16 ++
+ packages/ffi/gate.ts                    |  65 ++++++++
+ packages/ffi/native/Cargo.lock          |   7 +
+ packages/ffi/native/Cargo.toml          |  16 ++
+ packages/ffi/native/echo.h              |  13 ++
+ packages/ffi/native/src/lib.rs          |  98 +++++++++++
+ packages/ffi/package.json               |  71 ++++++++
+ packages/ffi/scripts/emit-elf-shims.mjs |  24 +++
+ packages/ffi/src/buffer.ts              |  29 ++++
+ packages/ffi/src/echo.ts                |  65 ++++++++
+ packages/ffi/src/index.ts               |  18 +++
+ packages/ffi/src/internal/ffi.ts        |  27 ++++
+ packages/ffi/src/layout.ts              |  43 +++++
+ packages/ffi/src/spec.ts                |  37 +++++
+ packages/ffi/test/consumer-elf.test.sh  |  63 ++++++++
+ packages/ffi/test/coverage.test.mjs     |  18 +++
+ packages/ffi/test/echo.test.c           |  50 ++++++
+ packages/ffi/test/elf.test.sh           |  26 +++
+ packages/ffi/test/koffi-binding.mjs     |  27 ++++
+ packages/ffi/test/wrapper.test.js       |  48 ++++++
+ packages/ffi/tsconfig.json              |  17 ++
+ packages/ffi/vendor/README.md           |   6 +
+ packages/ffi/vendor/manifest.json       |  16 ++
+ pnpm-lock.yaml                          | 205 ++++++++++++++++++++----
+ pnpm-workspace.yaml                     |   2 +-
+ 41 files changed, 1347 insertions(+), 34 deletions(-)
+ create mode 100644 .agents/plans/2026-11-03-cutils-ffi.md
+ create mode 100644 .changeset/little-ravens-end.md
+ create mode 100644 docs/ffi.md
+ create mode 100644 packages/ffi/AGENTS.md
+ create mode 100644 packages/ffi/CHANGELOG.md
+ create mode 100644 packages/ffi/LICENSE
+ create mode 100644 packages/ffi/README.md
+ create mode 100644 packages/ffi/ffi.json
+ create mode 100644 packages/ffi/gate.ffi.json
+ create mode 100644 packages/ffi/gate.ts
+ create mode 100644 packages/ffi/native/Cargo.lock
+ create mode 100644 packages/ffi/native/Cargo.toml
+ create mode 100644 packages/ffi/native/echo.h
+ create mode 100644 packages/ffi/native/src/lib.rs
+ create mode 100644 packages/ffi/package.json
+ create mode 100644 packages/ffi/scripts/emit-elf-shims.mjs
+ create mode 100644 packages/ffi/src/buffer.ts
+ create mode 100644 packages/ffi/src/echo.ts
+ create mode 100644 packages/ffi/src/index.ts
+ create mode 100644 packages/ffi/src/internal/ffi.ts
+ create mode 100644 packages/ffi/src/layout.ts
+ create mode 100644 packages/ffi/src/spec.ts
+ create mode 100755 packages/ffi/test/consumer-elf.test.sh
+ create mode 100644 packages/ffi/test/coverage.test.mjs
+ create mode 100644 packages/ffi/test/echo.test.c
+ create mode 100755 packages/ffi/test/elf.test.sh
+ create mode 100644 packages/ffi/test/koffi-binding.mjs
+ create mode 100644 packages/ffi/test/wrapper.test.js
+ create mode 100644 packages/ffi/tsconfig.json
+ create mode 100644 packages/ffi/vendor/README.md
+ create mode 100644 packages/ffi/vendor/manifest.json
+
+diff --git a/.agents/plans/2026-11-03-cutils-ffi.md b/.agents/plans/2026-11-03-cutils-ffi.md
+new file mode 100644
+index 0000000..affb702
+--- /dev/null
++++ b/.agents/plans/2026-11-03-cutils-ffi.md
+@@ -0,0 +1,36 @@
++# @cutils/ffi — shared scriptc FFI shim spec, 2026-11-03
++
++## What this is
++
++A small package that **names and reuses** the FFI ABI `@cutils/sqlite` already
++ships: scriptc `ffi_format: 7`, span ABI (`string`/`bytes` as `(ptr,len)`,
++`mutable-bytes` as `(buf,len)`), opaque handles as `pointer`/`bigint`.
++Downstream crates (`pty`, `keyring`, and a T3 fork swapping `ffi-rs`) share
++one spec instead of copying sqlite's manifest by hand.
++
++The package is not a runtime FFI engine (scriptc and Node/koffi already are).
++It ships:
++
++1. TypeScript types + buffer/layout helpers matching sqlite's shim comments.
++2. A tiny Rust staticlib that **echoes a `#[repr(C)]` struct** through that
++   ABI — the Phase 0 proof.
++3. The same dual-runtime plumbing sqlite uses: `declare function` +
++   `gate.ffi.json` / consumer `ffi.json` for ELF; koffi adapters for Node.
++
++## Why not a new ABI
++
++sqlite's shim is the production proof of format 7 in this repo. Changing
++widths, NUL-terminated strings, or returning owned C strings would fork the
++ecosystem. pty/keyring should look like more `shim_*` entry points, not a
++second convention.
++
++## Proof
++
++- `scriptc build gate.ts --ffi gate.ffi.json` runs and prints `gate OK`.
++- Node/koffi and a C link of the archive round-trip the same struct.
++- Consumer ELF: packed tarball + `--npm-static @cutils/ffi`.
++
++## Out of scope here
++
++`@cutils/pty` and `@cutils/keyring` wait until this package's ELF smoke is
++green. Do not half-ship them on a broken shim.
+diff --git a/.changeset/little-ravens-end.md b/.changeset/little-ravens-end.md
+new file mode 100644
+index 0000000..2f59ffb
+--- /dev/null
++++ b/.changeset/little-ravens-end.md
+@@ -0,0 +1,5 @@
++---
++"@cutils/ffi": minor
++---
++
++Initial release: shared scriptc ffi_format 7 span ABI (same as @cutils/sqlite) with layout/buffer helpers and a Rust EchoPoint echo used as the ELF smoke.
+diff --git a/.gitignore b/.gitignore
+index 1f00711..01eaea2 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -2,6 +2,7 @@
+ node_modules/
+ dist/
+ build/
++target/
+ 
+ .env
+ docs/site/
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index fbabb5a..8987502 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -4,7 +4,7 @@ cutils hosts the utility packages of the chttp/scriptc ecosystem. Two scopes, on
+ 
+ ## Scopes
+ 
+-- **`@cutils/*`** — general-purpose utilities that own their own C dependency and ship it behind an FFI shim (`@cutils/sqlite`; the pattern for the DB family, `@cutils/postgres`/`@cutils/mongo` later). The C library is vendored, the shim is ~26 fixed signatures, and the TypeScript wrapper is the only user-facing surface.
++- **`@cutils/*`** — general-purpose utilities that own their own native dependency and ship it behind an FFI shim. `@cutils/ffi` names the shared scriptc format-7 span ABI (the same one `@cutils/sqlite` already ships). `@cutils/sqlite` is the first production consumer; `@cutils/postgres`/`@cutils/mongo` are wire drivers without FFI. The native library is vendored, the shim is fixed signatures, and the TypeScript wrapper is the only user-facing surface.
+ - **`@chttp/*`** — request-scoped utilities that are a web-server concern, pure TypeScript over the same subset, no C. Most live in the [chttp](https://github.com/sigilco/chttp) monorepo; only `@cutils/cache` still ships from here.
+ 
+ ## The Standard-Schema seam
+diff --git a/README.md b/README.md
+index fb9ecd1..37a79bc 100644
+--- a/README.md
++++ b/README.md
+@@ -9,6 +9,7 @@
+ 
+ | Package | What it does |
+ | --- | --- |
++| [`@cutils/ffi`](packages/ffi) | Shared scriptc format-7 FFI spec (sqlite's span ABI) + Rust struct-echo smoke |
+ | [`@cutils/sqlite`](packages/sqlite) | Embedded SQLite: `Database`/`Stmt`/`Transaction` with a Standard-Schema row seam, vendored amalgamation + C shim, compiles into the ELF |
+ | [`@cutils/postgres`](packages/postgres) | Postgres wire driver over `node:net` + `node:crypto` (SCRAM-SHA-256, txns, LISTEN/NOTIFY), no FFI |
+ | [`@cutils/mongo`](packages/mongo) | MongoDB wire driver (OP_MSG + BSON, SCRAM-SHA-1/256, txns), no FFI |
+diff --git a/docs/docmd.config.json b/docs/docmd.config.json
+index 1f6856c..51b0068 100644
+--- a/docs/docmd.config.json
++++ b/docs/docmd.config.json
+@@ -38,6 +38,10 @@
+           "title": "Overview",
+           "path": "/packages"
+         },
++        {
++          "title": "@cutils/ffi",
++          "path": "/ffi"
++        },
+         {
+           "title": "@cutils/sqlite",
+           "path": "/sqlite"
+diff --git a/docs/ffi.md b/docs/ffi.md
+new file mode 100644
+index 0000000..9fdf7e7
+--- /dev/null
++++ b/docs/ffi.md
+@@ -0,0 +1,5 @@
++# @cutils/ffi
++
++Shared scriptc FFI spec used by `@cutils/sqlite` and by later native packages (`pty`, `keyring`). Format 7, span ABI, structs packed as `bytes`/`mutable-bytes`.
++
++See the package [README](https://github.com/sigilco/cutils/tree/main/packages/ffi) for the ELF compile recipe and the echo smoke.
+diff --git a/docs/index.md b/docs/index.md
+index ff11b92..c2b4b26 100644
+--- a/docs/index.md
++++ b/docs/index.md
+@@ -4,7 +4,7 @@ TypeScript utility packages for [chttp](https://github.com/sigilco/chttp) apps,
+ 
+ The repo carries two scopes:
+ 
+-- **`@cutils/*`** — general-purpose utilities that own their own native dependency (SQLite today; the DB family shape).
++- **`@cutils/*`** — general-purpose utilities that own their own native dependency (`@cutils/ffi` for the shared shim spec, SQLite today; the DB family shape).
+ - **`@chttp/*`** — request-scoped utilities that are a web-server concern (cache, MCP).
+ 
+ Every package follows the same contract: zero runtime dependencies, the Standard-Schema seam for user-typed data, `scriptc coverage` at 100% on its gate entry, and an end-to-end ELF smoke in its test suite.
+diff --git a/docs/packages.md b/docs/packages.md
+index d618381..f07171c 100644
+--- a/docs/packages.md
++++ b/docs/packages.md
+@@ -2,6 +2,7 @@
+ 
+ | Package | Scope | What it does |
+ | --- | --- | --- |
++| [`@cutils/ffi`](https://www.npmjs.com/package/@cutils/ffi) | cutils | Shared scriptc format-7 FFI spec (sqlite's span ABI) + Rust `EchoPoint` echo |
+ | [`@cutils/sqlite`](https://www.npmjs.com/package/@cutils/sqlite) | cutils | Embedded SQLite: `Database`/`Stmt`/`Transaction`, Standard-Schema row seam, vendored amalgamation + C shim |
+ | [`@cutils/postgres`](https://www.npmjs.com/package/@cutils/postgres) | cutils | Postgres wire driver over `node:net` + `node:crypto` (SCRAM-SHA-256, txns, LISTEN/NOTIFY), no FFI |
+ | [`@cutils/mongo`](https://www.npmjs.com/package/@cutils/mongo) | cutils | MongoDB wire driver (OP_MSG + BSON, SCRAM-SHA-1/256, txns), no FFI |
+diff --git a/docs/quickstart.md b/docs/quickstart.md
+index 545465d..cae1973 100644
+--- a/docs/quickstart.md
++++ b/docs/quickstart.md
+@@ -3,7 +3,8 @@
+ Each package installs from npm and works the same under Node and under `scriptc build`:
+ 
+ ```sh
+-pnpm add @cutils/sqlite   # embedded SQLite
++pnpm add @cutils/ffi       # shared format-7 FFI spec + struct echo
++pnpm add @cutils/sqlite    # embedded SQLite
+ pnpm add @cutils/cache     # LRU + TTL memory cache
+ ```
+ 
+diff --git a/package.json b/package.json
+index 73c24c2..0dd57fd 100644
+--- a/package.json
++++ b/package.json
+@@ -18,7 +18,7 @@
+     "@docmd/core": "^0.9.7",
+     "oxfmt": "^0.17.0",
+     "oxlint": "^1.87.0",
+-    "scriptc": ">=0.3.4",
++    "scriptc": "0.4.7",
+     "typescript": "^5.9.0"
+   },
+   "packageManager": "pnpm@12.11.2",
+diff --git a/packages/ffi/AGENTS.md b/packages/ffi/AGENTS.md
+new file mode 100644
+index 0000000..eea4720
+--- /dev/null
++++ b/packages/ffi/AGENTS.md
+@@ -0,0 +1,40 @@
++# @cutils/ffi AGENTS.md
++
++Shared scriptc FFI spec + Rust struct echo. Models on `@cutils/sqlite` for
++packaging; the ABI **is** sqlite's (format 7, span strings/bytes).
++
++## Commands
++
++- `pnpm build` — cargo test + release staticlib/cdylib, copy into `build/`,
++  `tsc` → `dist/`, `elf/shims.d.ts`
++- `pnpm test` — `test:c` (archive), `test:node` (koffi), coverage gate,
++  `elf.test.sh`, `consumer-elf.test.sh`
++
++## Layout
++
++- `native/` — `cutils-ffi-echo` crate (`staticlib` + `cdylib`). `EchoPoint`
++  is `#[repr(C)]`; `echo_point` uses the span ABI.
++- `vendor/manifest.json`, `gate.ffi.json`, `ffi.json` — same `functions`
++  and `system_libraries`; only `libraries` differs (repo / gate / installed).
++- `src/internal/ffi.ts` — `declare function` block matching the manifest.
++- `src/spec.ts` — format-7 TypeScript types (`FfiManifest`).
++- `src/buffer.ts` / `src/layout.ts` — sqlite-style scratch helpers and LE
++  field accessors. Do not introduce a Scratch class.
++
++## Package-specific subset rules
++
++Same as root AGENTS.md. Additional:
++
++- No struct returns from FFI. Pack/unpack through `Uint8Array`.
++- `EchoPoint.value` is `bigint` (format-7 `i64`). Do not widen it to `number`.
++- Keep `gate.ffi.json` / `ffi.json` / `vendor/manifest.json` function lists
++  in lockstep with `src/internal/ffi.ts` and `native/src/lib.rs`.
++
++## Pitfalls
++
++- `elf/shims.d.ts` is generated; ambient `declare function` only applies from
++  the consumer's program (same sqlite packaging trap).
++- Rust `staticlib` needs `system_libraries: ["pthread", "dl", "m"]`.
++- `panic = "abort"` in release so the archive does not pull unwind runtime.
++- Do not add `@cutils/pty` or `@cutils/keyring` in this package; they are
++  follow-up crates that **consume** this ABI.
+diff --git a/packages/ffi/CHANGELOG.md b/packages/ffi/CHANGELOG.md
+new file mode 100644
+index 0000000..9abc621
+--- /dev/null
++++ b/packages/ffi/CHANGELOG.md
+@@ -0,0 +1,7 @@
++# @cutils/ffi
++
++## 0.4.0
++
++### Minor Changes
++
++- Initial release: shared scriptc `ffi_format: 7` span ABI (same as `@cutils/sqlite`) with layout/buffer helpers and a Rust `EchoPoint` echo used as the ELF smoke.
+diff --git a/packages/ffi/LICENSE b/packages/ffi/LICENSE
+new file mode 100644
+index 0000000..d6dece7
+--- /dev/null
++++ b/packages/ffi/LICENSE
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright 2026 Joaquin Terrasa & contributors
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/packages/ffi/README.md b/packages/ffi/README.md
+new file mode 100644
+index 0000000..bd2bc68
+--- /dev/null
++++ b/packages/ffi/README.md
+@@ -0,0 +1,47 @@
++# @cutils/ffi
++
++Shared [scriptc](https://github.com/vercel-labs/scriptc) FFI shim spec — the same **format 7 span ABI** `@cutils/sqlite` already uses — plus little-endian layout helpers and a tiny Rust crate that echoes a `#[repr(C)]` struct. The same TypeScript runs under Node (koffi) and compiles through `scriptc build --ffi` into a static ELF.
++
++This is not a replacement for scriptc's linker or for Node-API. Outbound FFI stays `declare function` + a JSON manifest. This package names the ABI so pty/keyring/T3 forks do not invent a second one.
++
++```ts
++import { echoI32, echoPoint, FFI_FORMAT } from "@cutils/ffi";
++
++echoI32(41); // 41
++const out = echoPoint({ x: 41, y: -2, flags: 7, value: 99n });
++out.x; // 42 — native decoded the struct and added 1
++```
++
++## ABI (format 7)
++
++Copied from sqlite's shim, not a new convention:
++
++| Manifest type             | TypeScript              | Native C/Rust                                                |
++| ------------------------- | ----------------------- | ------------------------------------------------------------ |
++| `i32` / `u32` / `f64` / … | `number`                | matching scalar                                              |
++| `i64` / `u64` / `pointer` | `bigint`                | `i64` / `u64` / `void *`                                     |
++| `string` / `bytes`        | `string` / `Uint8Array` | `(const uint8_t *data, size_t len)` — **not** NUL-terminated |
++| `mutable-bytes`           | `Uint8Array`            | `(uint8_t *buf, size_t len)` caller-owned                    |
++
++Buffer-out convention (sqlite, reused here): return `>= 0` required bytes; if that exceeds `len`, write nothing and let the wrapper grow. `-1` is a domain null / input error.
++
++Structs are **not** a manifest type. Pack them with `writeI32`/`writeI64` into `bytes`, unpack from `mutable-bytes`. `EchoPoint` is 24 bytes on LE: `i32 x`, `i32 y`, `u32 flags`, 4 bytes padding, `i64 value`.
++
++## Compile to ELF
++
++```ts
++/// <reference path="./shims.d.ts" />
++import { echoPoint } from "@cutils/ffi/elf";
++```
++
++```sh
++cp node_modules/@cutils/ffi/elf/shims.d.ts ./shims.d.ts
++scriptc build app.ts --npm-static @cutils/ffi \
++  --ffi node_modules/@cutils/ffi/ffi.json
++```
++
++`ffi.json` points at the shipped `./build/libcutils_ffi_echo.a`. Do not pass `vendor/manifest.json` from a consumer — its `libraries` path is repo-layout.
++
++## Node
++
++`@cutils/ffi/node-binding` loads `build/libcutils_ffi_echo.so` through optional peer `koffi` and installs the `echo_*` globals the emitted JS calls. Tests do this automatically; apps that stay on Node should import the binding once at startup.
+diff --git a/packages/ffi/ffi.json b/packages/ffi/ffi.json
+new file mode 100644
+index 0000000..844dadc
+--- /dev/null
++++ b/packages/ffi/ffi.json
+@@ -0,0 +1,16 @@
++{
++  "ffi_format": 7,
++  "functions": [
++    { "name": "echo_size", "symbol": "echo_size", "params": [], "returns": "i32" },
++    { "name": "echo_i32", "symbol": "echo_i32", "params": ["i32"], "returns": "i32" },
++    { "name": "echo_i64", "symbol": "echo_i64", "params": ["i64"], "returns": "i64" },
++    {
++      "name": "echo_point",
++      "symbol": "echo_point",
++      "params": ["bytes", "mutable-bytes"],
++      "returns": "i32"
++    }
++  ],
++  "libraries": ["./build/libcutils_ffi_echo.a"],
++  "system_libraries": ["pthread", "dl", "m"]
++}
+diff --git a/packages/ffi/gate.ffi.json b/packages/ffi/gate.ffi.json
+new file mode 100644
+index 0000000..d8878ba
+--- /dev/null
++++ b/packages/ffi/gate.ffi.json
+@@ -0,0 +1,16 @@
++{
++  "ffi_format": 7,
++  "functions": [
++    { "name": "echo_size", "symbol": "echo_size", "params": [], "returns": "i32" },
++    { "name": "echo_i32", "symbol": "echo_i32", "params": ["i32"], "returns": "i32" },
++    { "name": "echo_i64", "symbol": "echo_i64", "params": ["i64"], "returns": "i64" },
++    {
++      "name": "echo_point",
++      "symbol": "echo_point",
++      "params": ["bytes", "mutable-bytes"],
++      "returns": "i32"
++    }
++  ],
++  "libraries": ["build/libcutils_ffi_echo.a"],
++  "system_libraries": ["pthread", "dl", "m"]
++}
+diff --git a/packages/ffi/gate.ts b/packages/ffi/gate.ts
+new file mode 100644
+index 0000000..a181ea8
+--- /dev/null
++++ b/packages/ffi/gate.ts
+@@ -0,0 +1,65 @@
++// scriptc coverage gate for @cutils/ffi: pack/echo a Rust EchoPoint.
++// test/elf.test.sh builds this file with `scriptc build --ffi gate.ffi.json`.
++
++import {
++  decodeEchoPoint,
++  echoI32,
++  echoI64,
++  echoPoint,
++  echoSize,
++  encodeEchoPoint,
++  ECHO_POINT_SIZE,
++  ECHO_POINT_VALUE_OFFSET,
++  FFI_FORMAT,
++} from "./src/index.ts";
++import type { EchoPoint, FfiManifest } from "./src/index.ts";
++
++function check(cond: boolean, name: string): void {
++  if (!cond) {
++    throw new Error("gate FAIL: " + name);
++  }
++}
++
++function main(): void {
++  check(FFI_FORMAT === 7, "ffi_format 7");
++  check(echoSize() === ECHO_POINT_SIZE, "echo_size matches TS constant");
++  check(ECHO_POINT_VALUE_OFFSET === 16, "i64 offset");
++
++  check(echoI32(41) === 41, "echo_i32");
++  check(echoI32(-8) === -8, "echo_i32 negative");
++  check(echoI64(BigInt(99)) === BigInt(99), "echo_i64");
++  check(echoI64(BigInt(-7)) === BigInt(-7), "echo_i64 negative");
++
++  const input: EchoPoint = {
++    x: 41,
++    y: -2,
++    flags: 7,
++    value: BigInt("1234567890123"),
++  };
++  const packed = encodeEchoPoint(input);
++  check(packed.length === ECHO_POINT_SIZE, "packed size");
++  const unpacked = decodeEchoPoint(packed);
++  check(unpacked.x === 41, "local x");
++  check(unpacked.y === -2, "local y");
++  check(unpacked.flags === 7, "local flags");
++  check(unpacked.value === input.value, "local value");
++
++  const echoed = echoPoint(input);
++  check(echoed.x === 42, "native x+1");
++  check(echoed.y === -2, "native y");
++  check(echoed.flags === 7, "native flags");
++  check(echoed.value === input.value, "native value");
++
++  const manifest: FfiManifest = {
++    ffi_format: 7,
++    functions: [{ name: "echo_size", symbol: "echo_size", params: [], returns: "i32" }],
++    libraries: ["./build/libcutils_ffi_echo.a"],
++    system_libraries: ["pthread", "dl", "m"],
++  };
++  check(manifest.ffi_format === 7, "manifest type");
++  check(manifest.functions.length === 1, "manifest functions");
++
++  console.log("gate OK");
++}
++
++main();
+diff --git a/packages/ffi/native/Cargo.lock b/packages/ffi/native/Cargo.lock
+new file mode 100644
+index 0000000..91938ed
+--- /dev/null
++++ b/packages/ffi/native/Cargo.lock
+@@ -0,0 +1,7 @@
++# This file is automatically @generated by Cargo.
++# It is not intended for manual editing.
++version = 4
++
++[[package]]
++name = "cutils-ffi-echo"
++version = "0.4.0"
+diff --git a/packages/ffi/native/Cargo.toml b/packages/ffi/native/Cargo.toml
+new file mode 100644
+index 0000000..02f25b2
+--- /dev/null
++++ b/packages/ffi/native/Cargo.toml
+@@ -0,0 +1,16 @@
++[package]
++name = "cutils-ffi-echo"
++version = "0.4.0"
++edition = "2021"
++license = "Apache-2.0"
++publish = false
++description = "repr(C) struct echo used by @cutils/ffi's scriptc format-7 smoke"
++
++[lib]
++name = "cutils_ffi_echo"
++crate-type = ["staticlib", "cdylib"]
++
++[profile.release]
++panic = "abort"
++lto = true
++codegen-units = 1
+diff --git a/packages/ffi/native/echo.h b/packages/ffi/native/echo.h
+new file mode 100644
+index 0000000..bbdede2
+--- /dev/null
++++ b/packages/ffi/native/echo.h
+@@ -0,0 +1,13 @@
++#ifndef CUTILS_FFI_ECHO_H
++#define CUTILS_FFI_ECHO_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++int32_t echo_size(void);
++int32_t echo_i32(int32_t value);
++int64_t echo_i64(int64_t value);
++int32_t echo_point(const uint8_t *in_ptr, size_t in_len, uint8_t *out_ptr,
++                   size_t out_len);
++
++#endif
+diff --git a/packages/ffi/native/src/lib.rs b/packages/ffi/native/src/lib.rs
+new file mode 100644
+index 0000000..669513a
+--- /dev/null
++++ b/packages/ffi/native/src/lib.rs
+@@ -0,0 +1,98 @@
++//! Format-7 span-ABI echo of a `#[repr(C)]` struct.
++//!
++//! `string`/`bytes` arrive as `(ptr, len)`; `mutable-bytes` as `(buf, len)`.
++//! Matches `packages/sqlite/vendor/shim/sqlite_shim.c`.
++
++use core::mem::size_of;
++use core::ptr;
++
++/// Little-endian host layout (x86_64 / aarch64). Size is 24: 4 bytes of
++/// padding sit between `flags` and `value` so `i64` is 8-aligned.
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct EchoPoint {
++    pub x: i32,
++    pub y: i32,
++    pub flags: u32,
++    pub value: i64,
++}
++
++pub const ECHO_POINT_SIZE: usize = 24;
++
++#[no_mangle]
++pub extern "C" fn echo_size() -> i32 {
++    size_of::<EchoPoint>() as i32
++}
++
++#[no_mangle]
++pub extern "C" fn echo_i32(value: i32) -> i32 {
++    value
++}
++
++#[no_mangle]
++pub extern "C" fn echo_i64(value: i64) -> i64 {
++    value
++}
++
++/// Copy `EchoPoint` from `in` into `out`, adding 1 to `x` so a successful
++/// call cannot be a JS-side memcpy. Return convention matches sqlite's
++/// buffer-out: `>= 0` is required bytes; if it exceeds `out_len` nothing
++/// is written. `-1` means the input span is too small.
++#[no_mangle]
++pub unsafe extern "C" fn echo_point(
++    in_ptr: *const u8,
++    in_len: usize,
++    out_ptr: *mut u8,
++    out_len: usize,
++) -> i32 {
++    let n = size_of::<EchoPoint>() as i32;
++    if in_ptr.is_null() || in_len < size_of::<EchoPoint>() {
++        return -1;
++    }
++    if out_ptr.is_null() || out_len < size_of::<EchoPoint>() {
++        return n;
++    }
++    let mut point = ptr::read_unaligned(in_ptr as *const EchoPoint);
++    point.x = point.x.wrapping_add(1);
++    ptr::write_unaligned(out_ptr as *mut EchoPoint, point);
++    n
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn layout_is_24() {
++        assert_eq!(size_of::<EchoPoint>(), ECHO_POINT_SIZE);
++        assert_eq!(echo_size(), ECHO_POINT_SIZE as i32);
++        assert_eq!(core::mem::offset_of!(EchoPoint, value), 16);
++    }
++
++    #[test]
++    fn roundtrip_adds_one_to_x() {
++        let input = EchoPoint {
++            x: 41,
++            y: -2,
++            flags: 7,
++            value: 99,
++        };
++        let mut in_buf = [0u8; ECHO_POINT_SIZE];
++        let mut out_buf = [0u8; ECHO_POINT_SIZE];
++        unsafe {
++            ptr::write_unaligned(in_buf.as_mut_ptr() as *mut EchoPoint, input);
++            let n = echo_point(
++                in_buf.as_ptr(),
++                in_buf.len(),
++                out_buf.as_mut_ptr(),
++                out_buf.len(),
++            );
++            assert_eq!(n, ECHO_POINT_SIZE as i32);
++            let out = ptr::read_unaligned(out_buf.as_ptr() as *const EchoPoint);
++            assert_eq!(out.x, 42);
++            assert_eq!(out.y, -2);
++            assert_eq!(out.flags, 7);
++            assert_eq!(out.value, 99);
++        }
++    }
++}
+diff --git a/packages/ffi/package.json b/packages/ffi/package.json
+new file mode 100644
+index 0000000..c4bd397
+--- /dev/null
++++ b/packages/ffi/package.json
+@@ -0,0 +1,71 @@
++{
++  "name": "@cutils/ffi",
++  "version": "0.4.0",
++  "description": "Shared scriptc format-7 FFI spec (sqlite's span ABI) plus a Rust struct-echo smoke. Compiles to a single static ELF.",
++  "license": "Apache-2.0",
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/sigilco/cutils.git",
++    "directory": "packages/ffi"
++  },
++  "files": [
++    "dist",
++    "src",
++    "native",
++    "vendor",
++    "elf",
++    "ffi.json",
++    "build/libcutils_ffi_echo.a"
++  ],
++  "type": "module",
++  "main": "./dist/esm/index.js",
++  "types": "./dist/esm/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./dist/esm/index.d.ts",
++      "import": "./dist/esm/index.js"
++    },
++    "./package.json": "./package.json",
++    "./node-binding": "./dist/esm/node-binding.mjs",
++    "./elf": "./dist/esm/index.js"
++  },
++  "scripts": {
++    "build:rust": "mkdir -p build && CARGO_TARGET_DIR=build/cargo cargo test --manifest-path native/Cargo.toml && CARGO_TARGET_DIR=build/cargo cargo build --release --manifest-path native/Cargo.toml && cp build/cargo/release/libcutils_ffi_echo.a build/libcutils_ffi_echo.a && cp build/cargo/release/libcutils_ffi_echo.so build/libcutils_ffi_echo.so",
++    "build:ts": "tsc -p tsconfig.json",
++    "build:elf": "node scripts/emit-elf-shims.mjs",
++    "build": "npm run build:rust && npm run build:ts && sed 's|\"\\.\\.\", \"build\"|\"..\", \"..\", \"build\"|' test/koffi-binding.mjs > dist/esm/node-binding.mjs && npm run build:elf",
++    "typecheck": "tsc -p tsconfig.json --noEmit",
++    "test": "npm run build && npm run test:c && npm run test:node && bash test/elf.test.sh && bash test/consumer-elf.test.sh",
++    "test:c": "cc -O2 test/echo.test.c build/libcutils_ffi_echo.a -o build/echo_test -lpthread -ldl -lm && ./build/echo_test",
++    "test:node": "node --test test/*.test.js test/*.test.mjs"
++  },
++  "devDependencies": {
++    "@types/node": "^24.0.0",
++    "koffi": "^2.14.1",
++    "typescript": "^5.9.0"
++  },
++  "engines": {
++    "node": ">=22"
++  },
++  "peerDependencies": {
++    "koffi": "^2.14.1"
++  },
++  "peerDependenciesMeta": {
++    "koffi": {
++      "optional": true
++    }
++  },
++  "author": "Joaquin Terrasa & contributors",
++  "keywords": [
++    "ffi",
++    "scriptc",
++    "native",
++    "elf",
++    "span-abi"
++  ],
++  "homepage": "https://github.com/sigilco/cutils/tree/main/packages/ffi#readme",
++  "bugs": {
++    "url": "https://github.com/sigilco/cutils/issues"
++  },
++  "sideEffects": false
++}
+diff --git a/packages/ffi/scripts/emit-elf-shims.mjs b/packages/ffi/scripts/emit-elf-shims.mjs
+new file mode 100644
+index 0000000..e81c392
+--- /dev/null
++++ b/packages/ffi/scripts/emit-elf-shims.mjs
+@@ -0,0 +1,24 @@
++// Emits elf/shims.d.ts — the ambient signature-only `echo_*` declarations
++// extracted from src/internal/ffi.ts. scriptc's --ffi needs these in the
++// CONSUMER's program to resolve the raw shim calls in the shipped dist JS.
++import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
++
++const src = readFileSync(new URL("../src/internal/ffi.ts", import.meta.url), "utf8");
++const decls = src.match(/(?:export )?declare function echo_\w+\s*\([^;]*\)[^;{]*;/gs);
++if (decls === null || decls.length === 0) {
++  throw new Error("no echo_* declarations found in src/internal/ffi.ts");
++}
++const body = decls.map((d) => d.replace(/\s+/g, " ").trim()).join("\n");
++mkdirSync(new URL("../elf", import.meta.url), { recursive: true });
++writeFileSync(
++  new URL("../elf/shims.d.ts", import.meta.url),
++  "// Ambient signature-only bindings for the @cutils/ffi echo shim. Copy this\n" +
++    "// file beside your entry point and reference it so scriptc --ffi can\n" +
++    "// resolve the echo_* calls in the package's shipped JS:\n" +
++    '//   /// <reference path="./shims.d.ts" />\n' +
++    "// Generated by scripts/emit-elf-shims.mjs from src/internal/ffi.ts —\n" +
++    "// do not edit by hand.\n" +
++    body +
++    "\n",
++);
++console.log(`wrote elf/shims.d.ts (${decls.length} declarations)`);
+diff --git a/packages/ffi/src/buffer.ts b/packages/ffi/src/buffer.ts
+new file mode 100644
+index 0000000..fc41b7c
+--- /dev/null
++++ b/packages/ffi/src/buffer.ts
+@@ -0,0 +1,29 @@
++// Scratch helpers for format-7 `mutable-bytes` out params.
++// Copied in spirit from `@cutils/sqlite`'s `internal/buffer.ts`: grow until
++// the shim's required-byte return fits, then copy out. Plain functions, not
++// a class — a class instance stored as a field of another package class
++// refuses under consumer `scriptc build` (sqlite's Scratch trap).
++
++/** Grow `scratch` until `cap` bytes fit; returns the live buffer. */
++export function ensure(scratch: Uint8Array, cap: number): Uint8Array {
++  let n = scratch.length;
++  if (n < 1) {
++    n = 1;
++  }
++  while (n < cap) {
++    n = n * 2;
++  }
++  if (n !== scratch.length) {
++    return new Uint8Array(n);
++  }
++  return scratch;
++}
++
++/** Copy the first `n` bytes out (scratch is reused by the caller). */
++export function copyOut(scratch: Uint8Array, n: number): Uint8Array {
++  const out = new Uint8Array(n);
++  for (let i = 0; i < n; i++) {
++    out[i] = scratch[i];
++  }
++  return out;
++}
+diff --git a/packages/ffi/src/echo.ts b/packages/ffi/src/echo.ts
+new file mode 100644
+index 0000000..5a341e1
+--- /dev/null
++++ b/packages/ffi/src/echo.ts
+@@ -0,0 +1,65 @@
++// Typed wrapper around the Rust `EchoPoint` echo. Layout matches
++// `native/src/lib.rs`: i32 x, i32 y, u32 flags, 4 bytes padding, i64 value.
++
++import { copyOut, ensure } from "./buffer.ts";
++import { ffiEchoI32, ffiEchoI64, ffiEchoPoint, ffiEchoSize } from "./internal/ffi.ts";
++import { readI32, readI64, readU32, writeI32, writeI64, writeU32 } from "./layout.ts";
++
++export const ECHO_POINT_SIZE = 24;
++export const ECHO_POINT_VALUE_OFFSET = 16;
++
++export interface EchoPoint {
++  x: number;
++  y: number;
++  flags: number;
++  value: bigint;
++}
++
++export function encodeEchoPoint(point: EchoPoint): Uint8Array {
++  const buf = new Uint8Array(ECHO_POINT_SIZE);
++  writeI32(buf, 0, point.x);
++  writeI32(buf, 4, point.y);
++  writeU32(buf, 8, point.flags);
++  writeI64(buf, ECHO_POINT_VALUE_OFFSET, point.value);
++  return buf;
++}
++
++export function decodeEchoPoint(buf: Uint8Array): EchoPoint {
++  return {
++    x: readI32(buf, 0),
++    y: readI32(buf, 4),
++    flags: readU32(buf, 8),
++    value: readI64(buf, ECHO_POINT_VALUE_OFFSET),
++  };
++}
++
++export function echoSize(): number {
++  return ffiEchoSize();
++}
++
++export function echoI32(value: number): number {
++  return ffiEchoI32(value);
++}
++
++export function echoI64(value: bigint): bigint {
++  // koffi returns a Number when the i64 fits in f64; scriptc returns bigint.
++  return BigInt(ffiEchoI64(value));
++}
++
++/** Native decode + encode: returned `x` is `point.x + 1`. */
++export function echoPoint(point: EchoPoint): EchoPoint {
++  const input = encodeEchoPoint(point);
++  let scratch: Uint8Array = new Uint8Array(ECHO_POINT_SIZE);
++  const need = ffiEchoPoint(input, scratch);
++  if (need < 0) {
++    throw new Error("echo_point: input too small");
++  }
++  if (need > scratch.length) {
++    scratch = ensure(scratch, need);
++    const retry = ffiEchoPoint(input, scratch);
++    if (retry !== need) {
++      throw new Error("echo_point: retry size mismatch");
++    }
++  }
++  return decodeEchoPoint(copyOut(scratch, ECHO_POINT_SIZE));
++}
+diff --git a/packages/ffi/src/index.ts b/packages/ffi/src/index.ts
+new file mode 100644
+index 0000000..f1e30d0
+--- /dev/null
++++ b/packages/ffi/src/index.ts
+@@ -0,0 +1,18 @@
++// @cutils/ffi — shared scriptc format-7 FFI spec + layout helpers, plus a
++// Rust struct-echo smoke used as the package's ELF proof.
++
++export { copyOut, ensure } from "./buffer.ts";
++export {
++  decodeEchoPoint,
++  echoI32,
++  echoI64,
++  echoPoint,
++  echoSize,
++  encodeEchoPoint,
++  ECHO_POINT_SIZE,
++  ECHO_POINT_VALUE_OFFSET,
++} from "./echo.ts";
++export type { EchoPoint } from "./echo.ts";
++export { readI32, readI64, readU32, writeI32, writeI64, writeU32 } from "./layout.ts";
++export { FFI_FORMAT } from "./spec.ts";
++export type { FfiFunctionDecl, FfiManifest, FfiScalar, FfiSpan, FfiType } from "./spec.ts";
+diff --git a/packages/ffi/src/internal/ffi.ts b/packages/ffi/src/internal/ffi.ts
+new file mode 100644
+index 0000000..97654e0
+--- /dev/null
++++ b/packages/ffi/src/internal/ffi.ts
+@@ -0,0 +1,27 @@
++// declare-function bindings for native/src/lib.rs.
++// These must match vendor/manifest.json exactly (names, arity, types).
++// Span ABI: `bytes` params marshal as (ptr,len) — the declare passes only
++// the Uint8Array; `mutable-bytes` out params marshal as (buf,len). Ambient
++// declarations cannot be exported. Under plain Node the emitted calls
++// resolve on globalThis — test/koffi-binding.mjs installs matching globals.
++
++declare function echo_size(): number;
++declare function echo_i32(value: number): number;
++declare function echo_i64(value: bigint): bigint;
++declare function echo_point(input: Uint8Array, output: Uint8Array): number;
++
++export function ffiEchoSize(): number {
++  return echo_size();
++}
++
++export function ffiEchoI32(value: number): number {
++  return echo_i32(value);
++}
++
++export function ffiEchoI64(value: bigint): bigint {
++  return echo_i64(value);
++}
++
++export function ffiEchoPoint(input: Uint8Array, output: Uint8Array): number {
++  return echo_point(input, output);
++}
+diff --git a/packages/ffi/src/layout.ts b/packages/ffi/src/layout.ts
+new file mode 100644
+index 0000000..6244ace
+--- /dev/null
++++ b/packages/ffi/src/layout.ts
+@@ -0,0 +1,43 @@
++// Little-endian field accessors for `#[repr(C)]` structs on LE hosts.
++// scriptc format 7 does not marshal structs: callers pack into `bytes` /
++// `mutable-bytes` with these helpers, matching native layout.
++
++export function writeI32(buf: Uint8Array, offset: number, value: number): void {
++  buf[offset] = value & 0xff;
++  buf[offset + 1] = (value >> 8) & 0xff;
++  buf[offset + 2] = (value >> 16) & 0xff;
++  buf[offset + 3] = (value >> 24) & 0xff;
++}
++
++export function readI32(buf: Uint8Array, offset: number): number {
++  return buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24);
++}
++
++export function writeU32(buf: Uint8Array, offset: number, value: number): void {
++  writeI32(buf, offset, value);
++}
++
++export function readU32(buf: Uint8Array, offset: number): number {
++  return readI32(buf, offset) >>> 0;
++}
++
++export function writeI64(buf: Uint8Array, offset: number, value: bigint): void {
++  let v = value;
++  const mask = BigInt(255);
++  const eight = BigInt(8);
++  for (let i = 0; i < 8; i++) {
++    buf[offset + i] = Number(v & mask);
++    v = v >> eight;
++  }
++}
++
++export function readI64(buf: Uint8Array, offset: number): bigint {
++  let v = BigInt(0);
++  const eight = BigInt(8);
++  for (let i = 7; i >= 0; i--) {
++    v = (v << eight) | BigInt(buf[offset + i]);
++  }
++  const bits = BigInt(64);
++  const sign = BigInt(1) << (bits - BigInt(1));
++  return (v ^ sign) - sign;
++}
+diff --git a/packages/ffi/src/spec.ts b/packages/ffi/src/spec.ts
+new file mode 100644
+index 0000000..cd098f8
+--- /dev/null
++++ b/packages/ffi/src/spec.ts
+@@ -0,0 +1,37 @@
++// Shared scriptc FFI manifest types. `ffi_format: 7` is the ABI
++// `@cutils/sqlite` already ships (span strings/bytes, pointer-as-bigint).
++// Downstream shims (pty, keyring, this package's echo crate) must match.
++
++export const FFI_FORMAT = 7;
++
++export type FfiScalar =
++  | "bool"
++  | "f32"
++  | "f64"
++  | "i8"
++  | "i16"
++  | "i32"
++  | "i64"
++  | "pointer"
++  | "u8"
++  | "u16"
++  | "u32"
++  | "u64";
++
++export type FfiSpan = "bytes" | "mutable-bytes" | "string";
++
++export type FfiType = FfiScalar | FfiSpan | "void";
++
++export interface FfiFunctionDecl {
++  name: string;
++  symbol: string;
++  params: FfiType[];
++  returns: FfiType;
++}
++
++export interface FfiManifest {
++  ffi_format: 7;
++  functions: FfiFunctionDecl[];
++  libraries: string[];
++  system_libraries: string[];
++}
+diff --git a/packages/ffi/test/consumer-elf.test.sh b/packages/ffi/test/consumer-elf.test.sh
+new file mode 100755
+index 0000000..f78f871
+--- /dev/null
++++ b/packages/ffi/test/consumer-elf.test.sh
+@@ -0,0 +1,63 @@
++#!/usr/bin/env bash
++# Consumer-side ELF smoke for @cutils/ffi: packs the package, installs the
++# tarball, compiles against "./elf" + "ffi.json".
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++PKG="$PWD"
++
++fail() {
++  echo "consumer-elf.test.sh FAIL: $*" >&2
++  exit 1
++}
++
++if [ ! -f build/libcutils_ffi_echo.a ]; then
++  fail "build/libcutils_ffi_echo.a missing — run pnpm build first"
++fi
++
++BIN="scriptc"
++if [ -x ../../node_modules/.bin/scriptc ]; then
++  BIN="$PKG/../../node_modules/.bin/scriptc"
++fi
++
++WORK="$PKG/build/consumer-smoke"
++rm -rf "$WORK"
++mkdir -p "$WORK"
++
++corepack pnpm pack --pack-destination "$WORK" >/dev/null || fail "pnpm pack"
++TARBALL=$(find "$WORK" -maxdepth 1 -name '*.tgz' | head -1)
++[ -n "$TARBALL" ] || fail "pnpm pack produced no tarball"
++
++cd "$WORK"
++cat > package.json <<'JSON'
++{ "name": "consumer-smoke", "private": true, "type": "module" }
++JSON
++
++corepack pnpm add --ignore-workspace "$TARBALL" >/dev/null || fail "pnpm add tarball"
++FFI="$WORK/node_modules/@cutils/ffi"
++[ -f "$FFI/ffi.json" ] || fail "ffi.json missing from installed package"
++[ -f "$FFI/elf/shims.d.ts" ] || fail "elf/shims.d.ts missing from installed package"
++[ -f "$FFI/build/libcutils_ffi_echo.a" ] || fail "archive missing from installed package"
++
++cp "$FFI/elf/shims.d.ts" ./shims.d.ts
++
++cat > app.ts <<'TS'
++/// <reference path="./shims.d.ts" />
++import { echoI32, echoPoint } from "@cutils/ffi/elf";
++
++function main(): void {
++  const n = echoI32(41);
++  const out = echoPoint({ x: 41, y: -2, flags: 7, value: BigInt(99) });
++  console.log("i32=" + String(n) + " x=" + String(out.x) + " y=" + String(out.y));
++}
++
++main();
++TS
++
++"$BIN" build app.ts --npm-static @cutils/ffi --ffi "$FFI/ffi.json" -o app-elf \
++  || fail "scriptc build"
++
++out=$(./app-elf) || fail "app-elf exited nonzero"
++printf '%s\n' "$out" | grep -q "i32=41 x=42 y=-2" \
++  || fail "expected \"i32=41 x=42 y=-2\", got: $out"
++echo "consumer-elf.test.sh OK"
+diff --git a/packages/ffi/test/coverage.test.mjs b/packages/ffi/test/coverage.test.mjs
+new file mode 100644
+index 0000000..0c133b9
+--- /dev/null
++++ b/packages/ffi/test/coverage.test.mjs
+@@ -0,0 +1,18 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { execFileSync } from "node:child_process";
++import { existsSync } from "node:fs";
++import { fileURLToPath } from "node:url";
++import path from "node:path";
++
++const pkg = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
++const rootBin = path.resolve(pkg, "../../node_modules/.bin/scriptc");
++const scriptc = existsSync(rootBin) ? rootBin : "scriptc";
++
++test("scriptc coverage gate.ts is 100% static", () => {
++  const out = execFileSync(scriptc, ["coverage", "gate.ts", "--ffi", "gate.ffi.json"], {
++    cwd: pkg,
++    encoding: "utf8",
++  });
++  assert.match(out, /compile statically\s+\d+\s+\(100%\)/, out);
++});
+diff --git a/packages/ffi/test/echo.test.c b/packages/ffi/test/echo.test.c
+new file mode 100644
+index 0000000..09857b0
+--- /dev/null
++++ b/packages/ffi/test/echo.test.c
+@@ -0,0 +1,50 @@
++/* C-level assertions over build/libcutils_ffi_echo.a. Span ABI: every
++ * bytes arg is a (ptr, len) pair, every out param a caller-owned buffer. */
++
++#include <assert.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include "../native/echo.h"
++
++int main(void) {
++  uint8_t in[24];
++  uint8_t out[24];
++  int32_t n;
++  int32_t x;
++
++  assert(echo_size() == 24);
++  assert(echo_i32(41) == 41);
++  assert(echo_i32(-8) == -8);
++  assert(echo_i64(99) == 99);
++  assert(echo_i64(-7) == -7);
++
++  memset(in, 0, sizeof(in));
++  /* x = 41 (LE) */
++  in[0] = 41;
++  /* y = -2 */
++  in[4] = 0xfe;
++  in[5] = 0xff;
++  in[6] = 0xff;
++  in[7] = 0xff;
++  /* flags = 7 */
++  in[8] = 7;
++  /* value = 99 at offset 16 */
++  in[16] = 99;
++
++  n = echo_point(in, sizeof(in), out, sizeof(out));
++  assert(n == 24);
++  memcpy(&x, out, 4);
++  assert(x == 42);
++  assert(out[4] == 0xfe);
++  assert(out[8] == 7);
++  assert(out[16] == 99);
++
++  n = echo_point(in, 8, out, sizeof(out));
++  assert(n == -1);
++  n = echo_point(in, sizeof(in), out, 8);
++  assert(n == 24);
++
++  printf("echo.test.c OK\n");
++  return 0;
++}
+diff --git a/packages/ffi/test/elf.test.sh b/packages/ffi/test/elf.test.sh
+new file mode 100755
+index 0000000..e2fe72c
+--- /dev/null
++++ b/packages/ffi/test/elf.test.sh
+@@ -0,0 +1,26 @@
++#!/usr/bin/env bash
++# ELF smoke for @cutils/ffi: compiles gate.ts — which echoes a Rust struct —
++# via `scriptc build --ffi`, runs it, and asserts the "gate OK" line.
++set -euo pipefail
++
++cd "$(dirname "$0")/.."
++
++fail() {
++  echo "elf.test.sh FAIL: $*" >&2
++  exit 1
++}
++
++if [ ! -f build/libcutils_ffi_echo.a ]; then
++  fail "build/libcutils_ffi_echo.a missing — run pnpm build first"
++fi
++
++BIN="scriptc"
++if [ -x ../../node_modules/.bin/scriptc ]; then
++  BIN="../../node_modules/.bin/scriptc"
++fi
++"$BIN" build gate.ts --ffi gate.ffi.json -o build/gate-elf \
++  || fail "scriptc build"
++
++out=$(./build/gate-elf) || fail "gate-elf exited nonzero"
++printf '%s\n' "$out" | grep -q "gate OK" || fail "expected 'gate OK', got: $out"
++echo "elf.test.sh OK"
+diff --git a/packages/ffi/test/koffi-binding.mjs b/packages/ffi/test/koffi-binding.mjs
+new file mode 100644
+index 0000000..c805871
+--- /dev/null
++++ b/packages/ffi/test/koffi-binding.mjs
+@@ -0,0 +1,27 @@
++// Installs the `echo_*` globals the emitted dist/esm/internal/ffi.js calls,
++// backed by the shared build (build/libcutils_ffi_echo.so) through koffi.
++// Span ABI: bytes/mutable-bytes cross as (ptr,len) pairs.
++
++import koffi from "koffi";
++import { fileURLToPath } from "node:url";
++import path from "node:path";
++
++const dir = path.dirname(fileURLToPath(import.meta.url));
++const lib = koffi.load(path.join(dir, "..", "build", "libcutils_ffi_echo.so"));
++
++const g = globalThis;
++
++const f = {
++  size: lib.func("int32 echo_size()"),
++  i32: lib.func("int32 echo_i32(int32 value)"),
++  i64: lib.func("int64 echo_i64(int64 value)"),
++  point: lib.func(
++    "int32 echo_point(const uint8_t *in_ptr, uint64 in_len, uint8_t *out_ptr, uint64 out_len)",
++  ),
++};
++
++g.echo_size = () => f.size();
++g.echo_i32 = (value) => f.i32(value);
++g.echo_i64 = (value) => f.i64(value);
++g.echo_point = (input, output) =>
++  f.point(input, BigInt(input.length), output, BigInt(output.length));
+diff --git a/packages/ffi/test/wrapper.test.js b/packages/ffi/test/wrapper.test.js
+new file mode 100644
+index 0000000..b09d5c3
+--- /dev/null
++++ b/packages/ffi/test/wrapper.test.js
+@@ -0,0 +1,48 @@
++import "./koffi-binding.mjs";
++import test from "node:test";
++import assert from "node:assert/strict";
++import {
++  decodeEchoPoint,
++  echoI32,
++  echoI64,
++  echoPoint,
++  echoSize,
++  encodeEchoPoint,
++  ECHO_POINT_SIZE,
++  FFI_FORMAT,
++} from "../dist/esm/index.js";
++
++test("format 7 constant and native size", () => {
++  assert.equal(FFI_FORMAT, 7);
++  assert.equal(echoSize(), ECHO_POINT_SIZE);
++});
++
++test("scalar echo", () => {
++  assert.equal(echoI32(41), 41);
++  assert.equal(echoI32(-8), -8);
++  assert.equal(echoI64(99n), 99n);
++  assert.equal(echoI64(-7n), -7n);
++});
++
++test("layout roundtrip without native", () => {
++  const packed = encodeEchoPoint({ x: 1, y: -2, flags: 3, value: 99n });
++  assert.equal(packed.length, 24);
++  const decoded = decodeEchoPoint(packed);
++  assert.equal(decoded.x, 1);
++  assert.equal(decoded.y, -2);
++  assert.equal(decoded.flags, 3);
++  assert.equal(decoded.value, 99n);
++});
++
++test("Rust struct echo adds 1 to x", () => {
++  const out = echoPoint({
++    x: 41,
++    y: -2,
++    flags: 7,
++    value: 1234567890123n,
++  });
++  assert.equal(out.x, 42);
++  assert.equal(out.y, -2);
++  assert.equal(out.flags, 7);
++  assert.equal(out.value, 1234567890123n);
++});
+diff --git a/packages/ffi/tsconfig.json b/packages/ffi/tsconfig.json
+new file mode 100644
+index 0000000..2cd5418
+--- /dev/null
++++ b/packages/ffi/tsconfig.json
+@@ -0,0 +1,17 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "NodeNext",
++    "moduleResolution": "NodeNext",
++    "strict": true,
++    "declaration": true,
++    "declarationMap": false,
++    "sourceMap": false,
++    "outDir": "dist/esm",
++    "rootDir": "src",
++    "rewriteRelativeImportExtensions": true,
++    "skipLibCheck": false,
++    "forceConsistentCasingInFileNames": true,
++  },
++  "include": ["src/**/*.ts"],
++}
+diff --git a/packages/ffi/vendor/README.md b/packages/ffi/vendor/README.md
+new file mode 100644
+index 0000000..bcc706b
+--- /dev/null
++++ b/packages/ffi/vendor/README.md
+@@ -0,0 +1,6 @@
++# vendor/
++
++`manifest.json` is the repo-layout copy of the format-7 FFI spec (`libraries`
++points at `../build/libcutils_ffi_echo.a`). `gate.ffi.json` and `ffi.json` must
++keep the same `functions` and `system_libraries`. The native implementation is
++the Rust crate in `../native/`, not a C amalgamation.
+diff --git a/packages/ffi/vendor/manifest.json b/packages/ffi/vendor/manifest.json
+new file mode 100644
+index 0000000..80b94d6
+--- /dev/null
++++ b/packages/ffi/vendor/manifest.json
+@@ -0,0 +1,16 @@
++{
++  "ffi_format": 7,
++  "functions": [
++    { "name": "echo_size", "symbol": "echo_size", "params": [], "returns": "i32" },
++    { "name": "echo_i32", "symbol": "echo_i32", "params": ["i32"], "returns": "i32" },
++    { "name": "echo_i64", "symbol": "echo_i64", "params": ["i64"], "returns": "i64" },
++    {
++      "name": "echo_point",
++      "symbol": "echo_point",
++      "params": ["bytes", "mutable-bytes"],
++      "returns": "i32"
++    }
++  ],
++  "libraries": ["../build/libcutils_ffi_echo.a"],
++  "system_libraries": ["pthread", "dl", "m"]
++}
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 586a296..d18abab 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -176,8 +176,8 @@ importers:
+         specifier: ^1.87.0
+         version: 1.88.0
+       scriptc:
+-        specifier: '>=0.3.4'
+-        version: 0.3.4
++        specifier: 0.4.7
++        version: 0.4.7
+       typescript:
+         specifier: ^5.9.0
+         version: 5.9.3
+@@ -251,6 +251,18 @@ importers:
+         specifier: ^5.9.0
+         version: 5.9.3
+ 
++  packages/ffi:
++    devDependencies:
++      '@types/node':
++        specifier: ^24.0.0
++        version: 24.19.2
++      koffi:
++        specifier: ^2.14.1
++        version: 2.16.3
++      typescript:
++        specifier: ^5.9.0
++        version: 5.9.3
++
+   packages/mongo:
+     devDependencies:
+       '@chttp/val':
+@@ -760,39 +772,107 @@ packages:
+     cpu: [x64]
+     os: [win32]
+ 
+-  '@scriptc/cli-darwin-arm64@0.3.4':
+-    resolution: {integrity: sha512-QBrIHVXnQ8K4DoLyzAcEvmPj3H/v6McZACegC6y7BzCSmbZAWk67OCG+mHRQVQ8PG4r71ocJmJhuHn940kF/gQ==}
++  '@scriptc/cli-darwin-arm64@0.4.7':
++    resolution: {integrity: sha512-gSy0PaiV8PKl2VIXF8gnMbKc+9kXvPUPvsb9sgQccm5dr4KvF5qVgGmfb4uHgWrZMuqjYusky2bpNVuEatYcPw==}
+     cpu: [arm64]
+     os: [darwin]
+ 
+-  '@scriptc/cli-darwin-x64@0.3.4':
+-    resolution: {integrity: sha512-QZC82uPwXLa7wVEbGsbsF+x1s8ba1QIXSTy8FaTZxHzJ+7U6WrvrHEE+ms7SnIhhh3fVS0Wl99Upoq2/oJzcfA==}
++  '@scriptc/cli-darwin-x64@0.4.7':
++    resolution: {integrity: sha512-fKTfP66NTFZ42Tj6qAU/iE8h6YF9h7QWEcEev6ogV4JGTMAhKwJYNuN6BqroYJ3EroJRObuyhQeyLwXuqnhZLg==}
+     cpu: [x64]
+     os: [darwin]
+ 
+-  '@scriptc/cli-linux-arm64-gnu@0.3.4':
+-    resolution: {integrity: sha512-GYn7ytjyF0cFy2xiPAvlRFGUbRESBchQFz/FNW0FFHf98N0swwqb5bwCF2a6LNwqf1eJas4kgUg5c6l6GLw85A==}
++  '@scriptc/cli-linux-arm64-gnu@0.4.7':
++    resolution: {integrity: sha512-J/qtttHAIDAoDKkSb9tow+LO81kjPT7GvAOMWK7WL7DfPp9RHQpF+RlL//weZQoi/Lthu1GZejku053mgOWxdg==}
+     cpu: [arm64]
+     os: [linux]
+     libc: [glibc]
+ 
+-  '@scriptc/cli-linux-arm64-musl@0.3.4':
+-    resolution: {integrity: sha512-D9kf98vWcn+KJXzqXo+XSX33c7izYD/BwpKtodCQ1iD8vTP8yGMrt3wdrX2UeSO0VcnbugepaMzs8NJ4F//t9Q==}
++  '@scriptc/cli-linux-arm64-musl@0.4.7':
++    resolution: {integrity: sha512-xr3tVByLQ0les8mJ7bjx4Vl+rdVao9UirxKhQhDspHfLVVuCiRUXpwCccMM5t2uAHc3HJ2Uu7CrxtT2ZRppjlQ==}
+     cpu: [arm64]
+     os: [linux]
+     libc: [musl]
+ 
+-  '@scriptc/cli-linux-x64-gnu@0.3.4':
+-    resolution: {integrity: sha512-oLTOhrvNKuu3k4sdUbI3n0EG0buNNNd8eq2XHsdeJCJXAZS0W/bS5HNdYJnDdkVPBv17HlBeCExXuw5vV/8H5A==}
++  '@scriptc/cli-linux-x64-gnu@0.4.7':
++    resolution: {integrity: sha512-Ftbuen21ZM5nNRWBUDqIUtBqyek0m7YXce8C7J7cz2DO9ouFX51KCJZHXT/yoHTec0+YUh1wr9QAEDGhLw3BRw==}
+     cpu: [x64]
+     os: [linux]
+     libc: [glibc]
+ 
+-  '@scriptc/cli-win32-x64-msvc@0.3.4':
+-    resolution: {integrity: sha512-h11c3RB7NIDV5c2ud9ysYTP035Q8NS0uVKvy8OSDCSoU3XIAOnfC+KiBBe0PtlSMl/ibv0C6tMFrI25Ckcxzew==}
++  '@scriptc/cli-linux-x64-musl@0.4.7':
++    resolution: {integrity: sha512-nL1FQjZTaBtde+79x9MpG0e7fr82MDJbvsZ0VIXRxkYPjFaLSpNU3lt1kettf35TCxk9xtyDAILFy2vg6/WFOQ==}
++    cpu: [x64]
++    os: [linux]
++    libc: [musl]
++
++  '@scriptc/cli-win32-x64-msvc@0.4.7':
++    resolution: {integrity: sha512-Fl9Wr0Bjbi2v4YvggO4gnfoz1XVX72Xw1w5iixY0ciHqGSV6a8Jh9ssyHQO0wCSWApczF+EcI3MSHNrOeJ/O1Q==}
+     cpu: [x64]
+     os: [win32]
+ 
++  '@scriptc/llvm-darwin-arm64@0.4.7':
++    resolution: {integrity: sha512-7ebKccmgGlddOCLfWbNPO27KwyaVswRr45+Faaf9lsZDgSC2jEpJYvcz1izrFITp+MyrhYQb2bZiEivv3RPfvQ==}
++    cpu: [arm64]
++    os: [darwin]
++    hasBin: true
++
++  '@scriptc/llvm-darwin-x64@0.4.7':
++    resolution: {integrity: sha512-IqvvyXn4quKxYwHXsY2jk/hyEzmxDw1n2dqkCAQEncKGRuUdlo/6wqlU79EAkwb5c7otPhTXt5XoMUYYG6JPTw==}
++    cpu: [x64]
++    os: [darwin]
++    hasBin: true
++
++  '@scriptc/llvm-linux-arm64-gnu@0.4.7':
++    resolution: {integrity: sha512-o3kmIW8Lf7kK6d8+tayS6XQe3pDGGBTG8vuyC+v3sJ40DA955BJhaTMEO0iqKB7gw7LDDqIM4TUg0YijZJg+QQ==}
++    cpu: [arm64]
++    os: [linux]
++    hasBin: true
++
++  '@scriptc/llvm-linux-arm64-musl@0.4.7':
++    resolution: {integrity: sha512-4E76jXggnRPd/DdxV96t3TG2DwX14A1NLNNEeZ991EJkU8h/sR5+HGSH0U+TV69W1YW4j7WjxyVDm0vCBUsijw==}
++    cpu: [arm64]
++    os: [linux]
++    hasBin: true
++
++  '@scriptc/llvm-linux-x64-gnu@0.4.7':
++    resolution: {integrity: sha512-6cqebbHdOQDk+kEAHmix2bbb4RxD0k0k/xNLGQvprDdot2zw+4g44/frM5VI/ZP2ryCPuPIfG0KRVAh2RX2v5Q==}
++    cpu: [x64]
++    os: [linux]
++    hasBin: true
++
++  '@scriptc/llvm-linux-x64-musl@0.4.7':
++    resolution: {integrity: sha512-3Yq5xpFYSLzFI6m+b1HOSYrY6MOs1VNCkUAFo8B++l+i8NTKlScOTZR07cqnI36O9z7YOtfFqJqeC2oZPod0hg==}
++    cpu: [x64]
++    os: [linux]
++    hasBin: true
++
++  '@scriptc/llvm-win32-x64-msvc@0.4.7':
++    resolution: {integrity: sha512-pNTo1d/tarCiN40PYbYoREc84NiaPEY6IghWsiE1/cKySdGzqC1Oi9ItHEQRTkEKayuj0eVngOYy+HvNJUAolw==}
++    cpu: [x64]
++    os: [win32]
++
++  '@scriptc/runtime-darwin-arm64@0.4.7':
++    resolution: {integrity: sha512-Q3gppg3p518PLNnDRC/xjdb9J+/lrzJ8dwl6oepNDytXJ4WX3RJLNORfAWbTDlsUGVBHsnc3Uei/dlgEGexXhg==}
++
++  '@scriptc/runtime-darwin-x64@0.4.7':
++    resolution: {integrity: sha512-S5JICvn0RbVutvb/KzZ806bSqBtnnKYLLj/xa5hq1QPyG+YnKC4wWUjpJvXI54VncTGD5QqH3qdjvoRaXUDsWQ==}
++
++  '@scriptc/runtime-linux-arm64-gnu@0.4.7':
++    resolution: {integrity: sha512-704xNDuQq/WhfqcFN7DiSQdI5AXV0Q2/zeD8feD55szpPawpBYzUL580Xu0sGkGSS6+qj3nWCePTEFDbQ5emdg==}
++
++  '@scriptc/runtime-linux-arm64-musl@0.4.7':
++    resolution: {integrity: sha512-JAJJ4m/1sSH0pdr6unX9toWcDgm/H6JM6MQ+VClmJYiCgz8miOvvKjVxHeAJQ7IRCIi9LOfd6JCtQHUeCsHg7g==}
++
++  '@scriptc/runtime-linux-x64-gnu@0.4.7':
++    resolution: {integrity: sha512-Y2mJStbP9LcktnRUHNXP5voux4K/IBUusLTxF1pdP48bK/SQWgqKZGYJBLJysd+iRc2cGjWJ0uklK0a/yM6hqg==}
++
++  '@scriptc/runtime-linux-x64-musl@0.4.7':
++    resolution: {integrity: sha512-oW9GwqzY0MHIG04ujNw2Vvke21opU5iekib1gI7AVK6j40gJkhjPWpfI5rUHSfVqeqavzwjdi8x0hnjwaZQYnw==}
++
++  '@scriptc/runtime-win32-x64-msvc@0.4.7':
++    resolution: {integrity: sha512-QP3N6a0MBOj9I/tDD3rbndXLivPdprqQmKmXvZ1IlTe4UWwXYyOKR0P9IwP0OUqcR2FqNwCZojG8nV7UKIOGTw==}
++
+   '@standard-schema/spec@1.1.0':
+     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+ 
+@@ -980,8 +1060,8 @@ packages:
+     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
+     engines: {node: '>=6'}
+ 
+-  scriptc@0.3.4:
+-    resolution: {integrity: sha512-9BrdTJldGt7Sf77EZ+imsHkpQCCKRkDymv90zXhQM4j/fE+LnWeEKMbZhtg9RFZ9NAyV6Ni99EYHrT4gvcmXNg==}
++  scriptc@0.4.7:
++    resolution: {integrity: sha512-ItYZ47OWpLRiNGMTup6erhZJDImWyAQC5XYKPZDDPMby42QUKs8hNWD4r+MHOl5ndEiHv2CM5Lz91s2L6qnfvA==}
+     engines: {node: '>=24'}
+     hasBin: true
+ 
+@@ -1350,22 +1430,88 @@ snapshots:
+   '@oxlint/binding-win32-x64-msvc@1.88.0':
+     optional: true
+ 
+-  '@scriptc/cli-darwin-arm64@0.3.4':
++  '@scriptc/cli-darwin-arm64@0.4.7':
++    dependencies:
++      '@scriptc/llvm-darwin-arm64': 0.4.7
++      '@scriptc/runtime-darwin-arm64': 0.4.7
++    optional: true
++
++  '@scriptc/cli-darwin-x64@0.4.7':
++    dependencies:
++      '@scriptc/llvm-darwin-x64': 0.4.7
++      '@scriptc/runtime-darwin-x64': 0.4.7
++    optional: true
++
++  '@scriptc/cli-linux-arm64-gnu@0.4.7':
++    dependencies:
++      '@scriptc/llvm-linux-arm64-gnu': 0.4.7
++      '@scriptc/runtime-linux-arm64-gnu': 0.4.7
++    optional: true
++
++  '@scriptc/cli-linux-arm64-musl@0.4.7':
++    dependencies:
++      '@scriptc/llvm-linux-arm64-musl': 0.4.7
++      '@scriptc/runtime-linux-arm64-musl': 0.4.7
++    optional: true
++
++  '@scriptc/cli-linux-x64-gnu@0.4.7':
++    dependencies:
++      '@scriptc/llvm-linux-x64-gnu': 0.4.7
++      '@scriptc/runtime-linux-x64-gnu': 0.4.7
++    optional: true
++
++  '@scriptc/cli-linux-x64-musl@0.4.7':
++    dependencies:
++      '@scriptc/llvm-linux-x64-musl': 0.4.7
++      '@scriptc/runtime-linux-x64-musl': 0.4.7
++    optional: true
++
++  '@scriptc/cli-win32-x64-msvc@0.4.7':
++    dependencies:
++      '@scriptc/llvm-win32-x64-msvc': 0.4.7
++      '@scriptc/runtime-win32-x64-msvc': 0.4.7
++    optional: true
++
++  '@scriptc/llvm-darwin-arm64@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-darwin-x64@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-linux-arm64-gnu@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-linux-arm64-musl@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-linux-x64-gnu@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-linux-x64-musl@0.4.7':
++    optional: true
++
++  '@scriptc/llvm-win32-x64-msvc@0.4.7':
++    optional: true
++
++  '@scriptc/runtime-darwin-arm64@0.4.7':
++    optional: true
++
++  '@scriptc/runtime-darwin-x64@0.4.7':
+     optional: true
+ 
+-  '@scriptc/cli-darwin-x64@0.3.4':
++  '@scriptc/runtime-linux-arm64-gnu@0.4.7':
+     optional: true
+ 
+-  '@scriptc/cli-linux-arm64-gnu@0.3.4':
++  '@scriptc/runtime-linux-arm64-musl@0.4.7':
+     optional: true
+ 
+-  '@scriptc/cli-linux-arm64-musl@0.3.4':
++  '@scriptc/runtime-linux-x64-gnu@0.4.7':
+     optional: true
+ 
+-  '@scriptc/cli-linux-x64-gnu@0.3.4':
++  '@scriptc/runtime-linux-x64-musl@0.4.7':
+     optional: true
+ 
+-  '@scriptc/cli-win32-x64-msvc@0.3.4':
++  '@scriptc/runtime-win32-x64-msvc@0.4.7':
+     optional: true
+ 
+   '@standard-schema/spec@1.1.0': {}
+@@ -1552,14 +1698,15 @@ snapshots:
+ 
+   punycode@2.3.1: {}
+ 
+-  scriptc@0.3.4:
++  scriptc@0.4.7:
+     optionalDependencies:
+-      '@scriptc/cli-darwin-arm64': 0.3.4
+-      '@scriptc/cli-darwin-x64': 0.3.4
+-      '@scriptc/cli-linux-arm64-gnu': 0.3.4
+-      '@scriptc/cli-linux-arm64-musl': 0.3.4
+-      '@scriptc/cli-linux-x64-gnu': 0.3.4
+-      '@scriptc/cli-win32-x64-msvc': 0.3.4
++      '@scriptc/cli-darwin-arm64': 0.4.7
++      '@scriptc/cli-darwin-x64': 0.4.7
++      '@scriptc/cli-linux-arm64-gnu': 0.4.7
++      '@scriptc/cli-linux-arm64-musl': 0.4.7
++      '@scriptc/cli-linux-x64-gnu': 0.4.7
++      '@scriptc/cli-linux-x64-musl': 0.4.7
++      '@scriptc/cli-win32-x64-msvc': 0.4.7
+ 
+   sparse-bitfield@3.0.3:
+     dependencies:
+diff --git a/pnpm-workspace.yaml b/pnpm-workspace.yaml
+index ef4540f..81d39d2 100644
+--- a/pnpm-workspace.yaml
++++ b/pnpm-workspace.yaml
+@@ -18,6 +18,6 @@ versioning:
+     - "@cutils-example/todo-app-postgres"
+     - "@cutils-example/todo-app-mongo"
+   fixed:
+-    - ["@cutils/sqlite", "@cutils/postgres", "@cutils/mongo", "@cutils/cache"]
++    - ["@cutils/sqlite", "@cutils/postgres", "@cutils/mongo", "@cutils/cache", "@cutils/ffi"]
+   changelog:
+     storage: repository
+-- 
+2.43.0
+
