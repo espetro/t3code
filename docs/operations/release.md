@@ -675,10 +675,11 @@ archives. They do not use `vX.Y.Z` tags.
 1. From the commit to test: `git tag scriptc-v0.1.6-native.1 && git push origin scriptc-v0.1.6-native.1`
 2. `.github/workflows/scriptc-native.yml` runs `vp run --filter t3 build:scriptc -- --exec --outdir dist-scriptc`
 3. If `scriptc` is not on PATH, the job succeeds and **does not** open a GitHub Release
-4. If binaries exist, they attach to a GitHub **prerelease** named `Native t3code-server <tag>`
-5. `workflow_dispatch` without a tag only uploads Actions artifacts
+4. If binaries exist, `scriptc-smoke.ts` compares `acp-mcp-call` to the Node entry and checks `manifest.json` `scriptcVersion` against the pin; a mismatch fails the job
+5. Those ELFs plus `manifest.json` attach to a GitHub **prerelease** named `Native t3code-server <tag>`
+6. `workflow_dispatch` without a tag only uploads Actions artifacts
 
-Until ScriptC can compile those entries, step 3 is the expected outcome.
+Until ScriptC can compile those entries, step 3 is the expected outcome. The first successful compile is what publishes assets.
 
 ## 5) Troubleshooting
 

@@ -44,6 +44,10 @@ jobs:
             cat dist-scriptc/.skipped >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Smoke native ACP binaries
+        if: steps.scriptc.outputs.skipped != 'true'
+        run: node --experimental-strip-types apps/server/scripts/scriptc-smoke.ts --outdir dist-scriptc
+
       - name: Upload native artifacts
         if: steps.scriptc.outputs.skipped != 'true'
         uses: actions/upload-artifact@v4
