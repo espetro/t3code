@@ -3,7 +3,7 @@
   // Exported types are part of our contracts even before they have consumers.
   "rules": { "types": "off", "nsTypes": "off" },
   // These executables are supplied by the OS or installed separately from npm.
-  "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
+  "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips", "scriptc"],
   "workspaces": {
     ".": {
       // Keep vendored reference repositories outside the root project.
@@ -48,7 +48,10 @@
       "entry": [
         "src/bin.ts!",
         "src/claude-history-worker.ts!",
+        "src/scriptc/acpMcpBridge.ts!",
+        "src/scriptc/acpMcpCall.ts!",
         "scripts/cli.ts",
+        "scripts/scriptc-build.ts",
         "scripts/fetch-expo-schema.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
         "scripts/update-test-shard-weights.ts",
@@ -90,7 +93,8 @@
       ],
       // The injected runtime resolves Playwright by string; release tooling runs
       // electron-builder from this workspace, outside its package scripts.
-      "ignoreDependencies": ["playwright-core", "electron-builder"],
+      // Native addons stay in the Electron asar; nativeFfi loads ffi-rs at runtime.
+      "ignoreDependencies": ["playwright-core", "electron-builder", "ffi-rs"],
     },
     "apps/web": {
       // Worktree setup (scripts/setup-worktree.ts) runs this directly, and evidence
