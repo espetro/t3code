@@ -96,6 +96,7 @@
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "graphql": "16.14.1",
+    "scriptc": "0.4.7",
     "vite-plus": "catalog:"
   },
   "engines": {

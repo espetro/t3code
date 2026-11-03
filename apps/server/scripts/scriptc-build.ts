@@ -13,6 +13,9 @@ const SCRIPTC_ENTRIES = [
   { name: "acp-mcp-call", source: "src/scriptc/acpMcpCall.ts" },
 ] as const;
 
+/** scriptc's runtime pack ABI moves every release; the build only works against this one. */
+const SCRIPTC_PINNED_VERSION = "0.4.7";
+
 const SKIPPED_MARKER = ".skipped";
 
 function selectedEntries(names: ReadonlyArray<string>) {
@@ -71,6 +74,30 @@ function skip(outdir: string, reason: string): void {
   process.exitCode = 0;
 }
 
+/**
+ * The installed scriptc binary, preferring the workspace (pinned devDependency)
+ * over whatever happens to be on PATH. `SCRIPTC_BINARY` overrides both, for
+ * tests and for locally built compilers.
+ */
+function resolveScriptcBinary(): string | null {
+  const override = process.env.SCRIPTC_BINARY;
+  if (override !== undefined && override.length > 0) {
+    return NodeFS.existsSync(override) ? override : null;
+  }
+  const workspaceBinary = NodePath.join(serverDir, "node_modules", ".bin", "scriptc");
+  if (NodeFS.existsSync(workspaceBinary)) return workspaceBinary;
+  const onPath = NodeChildProcess.spawnSync("scriptc", ["--version"], { encoding: "utf8" });
+  return onPath.error === undefined ? "scriptc" : null;
+}
+
+/** Null when the version cannot be determined; the caller decides how strict to be. */
+function scriptcVersion(binary: string): string | null {
+  const result = NodeChildProcess.spawnSync(binary, ["--version"], { encoding: "utf8" });
+  if (result.error !== undefined || result.status !== 0) return null;
+  const version = result.stdout.trim();
+  return version.length > 0 ? version : null;
+}
+
 function main(): void {
   const { exec, outdir, names } = parseArgs(process.argv.slice(2));
   const entries = selectedEntries(names).map((entry) => ({
@@ -84,6 +111,28 @@ function main(): void {
     return;
   }
 
+  const binary = resolveScriptcBinary();
+  if (binary === null) {
+    skip(
+      outdir,
+      "scriptc is not installed; native ACP entry builds belong to the scriptc toolchain.",
+    );
+    return;
+  }
+  const version = scriptcVersion(binary);
+  if (version === null) {
+    skip(outdir, `could not determine the scriptc version reported by ${binary}.`);
+    return;
+  }
+  if (version !== SCRIPTC_PINNED_VERSION) {
+    process.stderr.write(
+      `scriptc ${version} does not match the pinned ${SCRIPTC_PINNED_VERSION}; update apps/server/package.json and scripts/scriptc-build.ts together.\n`,
+    );
+    process.exitCode = 1;
+    writeGitHubOutput({ skipped: "true", files: "" });
+    return;
+  }
+
   NodeFS.mkdirSync(outdir, { recursive: true });
   const skippedPath = NodePath.join(outdir, SKIPPED_MARKER);
   if (NodeFS.existsSync(skippedPath)) NodeFS.rmSync(skippedPath);
@@ -91,21 +140,13 @@ function main(): void {
   const produced: string[] = [];
   for (const entry of entries) {
     const spawned = NodeChildProcess.spawnSync(
-      "scriptc",
+      binary,
       ["build", entry.sourcePath, "--outfile", entry.outfile],
       {
         cwd: serverDir,
         stdio: "inherit",
       },
     );
-    const code = (spawned.error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
-      skip(
-        outdir,
-        "scriptc is not on PATH; native ACP entry builds belong to the scriptc toolchain.",
-      );
-      return;
-    }
     if (spawned.status !== 0) {
       process.exitCode = spawned.status === null ? 1 : spawned.status;
       writeGitHubOutput({ skipped: "true", files: "" });
@@ -122,7 +163,7 @@ function main(): void {
 
   NodeFS.writeFileSync(
     NodePath.join(outdir, "manifest.json"),
-    `${JSON.stringify({ skipped: false, files: produced }, null, 2)}\n`,
+    `${JSON.stringify({ skipped: false, scriptcVersion: version, files: produced }, null, 2)}\n`,
   );
   writeGitHubOutput({ skipped: "false", files: produced.join("\n") });
 }
