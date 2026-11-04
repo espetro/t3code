@@ -1,5 +1,5 @@
 // Relay JSON-RPC verbatim; schema decoding would reject foreign payloads.
-// Effect.fn rewrite is reverted-once-upstream (scriptc#2948).
+// oxlint-disable t3code/prefer-effect-fn -- rewrite is reverted-once-upstream (scriptc#2948)
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodeReadline from "node:readline";
 
@@ -86,9 +86,7 @@ export const mcpToolSession = (
     ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
   });
 
-  const send = (
-    message: unknown,
-  ): Effect.Effect<ReadonlyArray<unknown>, AcpMcpBridgeError> =>
+  const send = (message: unknown): Effect.Effect<ReadonlyArray<unknown>, AcpMcpBridgeError> =>
     Effect.gen(function* () {
       const response = yield* Effect.tryPromise({
         try: (signal) =>
@@ -275,7 +273,8 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
         }
         const envelope = asEnvelope(parsed.success);
         if (envelope === null) return;
-        const isResponse = envelope.id !== undefined && ("result" in envelope || "error" in envelope);
+        const isResponse =
+          envelope.id !== undefined && ("result" in envelope || "error" in envelope);
         const isSessionHandshake =
           envelope.method === "initialize" || envelope.method === "notifications/initialized";
         if (isResponse) {
@@ -283,7 +282,9 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
         }
         if (isSessionHandshake) {
           const prior = sessionBarrier;
-          const fiber = yield* Effect.forkChild(prior.pipe(Effect.andThen(forward(line, envelope))));
+          const fiber = yield* Effect.forkChild(
+            prior.pipe(Effect.andThen(forward(line, envelope))),
+          );
           running.add(fiber);
           const barrier = Fiber.await(fiber).pipe(Effect.asVoid);
           sessionBarrier = barrier;
