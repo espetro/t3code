@@ -8,14 +8,10 @@ export function guardHttpResponseWriteErrors<T extends NodeHttp.Server>(
   onError?: (error: unknown) => void,
 ): T {
   server.on("request", (_request, response) => {
-    response.on("error", (error) => {
-      onError?.(error);
-    });
+    containWritableErrors(response, onError);
   });
   server.on("upgrade", (_request, socket) => {
-    socket.on("error", (error) => {
-      onError?.(error);
-    });
+    containWritableErrors(socket, onError);
   });
   return server;
 }
@@ -48,4 +44,39 @@ export function rejectRequestsUntilServing<T extends NodeHttp.Server>(server: T)
     }
   });
   return server;
+}
+
+function containWritableErrors(
+  writable: NodeStream.Writable,
+  onError?: (error: unknown) => void,
+): void {
+  const write = writable.write;
+  const end = writable.end;
+  const closed = () => writable.destroyed || writable.writableEnded || writable.writableAborted;
+  writable.write = function (this: NodeStream.Writable, ...args: unknown[]) {
+    if (closed()) return false;
+    try {
+      return Reflect.apply(write, this, args);
+    } catch (error) {
+      onError?.(error);
+      return false;
+    }
+  } as typeof writable.write;
+  writable.end = function (this: NodeStream.Writable, ...args: unknown[]) {
+    if (closed()) return this;
+    try {
+      return Reflect.apply(end, this, args);
+    } catch (error) {
+      onError?.(error);
+      return this;
+    }
+  } as typeof writable.end;
+  const emit = writable.emit;
+  writable.emit = function (this: NodeStream.Writable, event: string | symbol, ...args: unknown[]) {
+    if (event === "error") {
+      onError?.(args[0]);
+      return true;
+    }
+    return emit.apply(this, [event, ...args] as never);
+  };
 }

@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as HostProcess from "./HostProcess.ts";
+import type { NativeFfi } from "./nativeFfi.ts";
 
 export class ManagedPolicyFileError extends Schema.TaggedError<ManagedPolicyFileError>()(
   "ManagedPolicyFileError",
@@ -135,10 +136,10 @@ const ERROR_MORE_DATA = 234;
 const ERROR_UNSUPPORTED_TYPE = 1630;
 
 /**
- * Each app passes how it loads ffi-rs: a server single-executable resolves packages on disk only
- * through `require`, and the desktop's CommonJS bundle loads them with `import()`.
+ * Each app passes how it loads NativeFfi: a server single-executable resolves packages on disk
+ * only through `require`, and the desktop's CommonJS bundle loads them with `import()`.
  */
-export const layerWindowsRegistry = (loadFfi: () => Promise<typeof import("ffi-rs")>) =>
+export const layerWindowsRegistry = (loadFfi: () => Promise<NativeFfi>) =>
   Layer.effect(
     WindowsRegistry,
     Effect.gen(function* () {

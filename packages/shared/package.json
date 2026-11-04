@@ -343,6 +343,10 @@
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
     },
+    "./nativeFfi": {
+      "types": "./src/nativeFfi.ts",
+      "import": "./src/nativeFfi.ts"
+    },
     "./testing/longTempDir": {
       "types": "./src/testing/longTempDir.ts",
       "import": "./src/testing/longTempDir.ts"

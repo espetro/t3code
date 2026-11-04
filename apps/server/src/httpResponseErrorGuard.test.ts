@@ -123,6 +123,31 @@ describe("guardHttpResponseWriteErrors", () => {
     });
     await expect(fetchStatus(port, "/")).resolves.toBe(200);
   });
+
+  it("skips HTTP response writes after destroy instead of throwing", async () => {
+    const writeErrors: unknown[] = [];
+    const server = guardHttpResponseWriteErrors(NodeHttp.createServer(), (error) => {
+      writeErrors.push(error);
+    });
+    const wrote = Promise.withResolvers<boolean>();
+    server.on("request", (_request, response) => {
+      response.destroy();
+      let accepted = true;
+      try {
+        accepted = response.write("late") !== false;
+      } catch (error) {
+        writeErrors.push(error);
+        accepted = true;
+      }
+      wrote.resolve(accepted);
+    });
+    const port = await listen(server);
+    const request = NodeHttp.get({ host: "127.0.0.1", port, path: "/", agent: false });
+    requests.push(request);
+    request.on("error", () => {});
+    await expect(wrote.promise).resolves.toBe(false);
+    expect(writeErrors).toEqual([]);
+  });
 });
 
 describe("rejectRequestsUntilServing", () => {

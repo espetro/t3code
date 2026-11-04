@@ -11,6 +11,7 @@ import {
   readManagedPolicy,
   WindowsRegistry,
 } from "@t3tools/shared/managedPolicyFile";
+import { loadFfiRs } from "@t3tools/shared/nativeFfi";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -47,7 +48,7 @@ export const layer = Layer.effect(
     );
     return DesktopManagedPolicy.of({ read });
   }),
-).pipe(Layer.provide(layerWindowsRegistry(() => import("ffi-rs"))));
+).pipe(Layer.provide(layerWindowsRegistry(loadFfiRs)));
 
 /** A machine with `policy` deployed, one whose policy cannot be used, or none. */
 export const layerTest = (policy?: ManagedPolicyDocument | ManagedPolicyFileError) =>

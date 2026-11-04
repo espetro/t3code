@@ -1,0 +1,87 @@
+# Native ScriptC binaries for t3code-server fast paths (acp-mcp-bridge, acp-mcp-call).
+# Cut a prerelease: `git tag scriptc-v<version> && git push origin scriptc-v<version>`
+# Or Actions → ScriptC native → Run workflow (uploads artifacts only; no empty release).
+# Publishes a GitHub Release only when at least one ELF is produced with a recorded
+# libnode pack. Missing scriptc or an unobtainable libnode pack skips publish.
+# A present compiler that fails the compile fails the job.
+name: ScriptC native
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "scriptc-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scriptc-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Build ScriptC ACP entries
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter t3...
+
+      - name: Cache assembled libnode pack
+        uses: actions/cache@v4
+        with:
+          path: apps/server/.scriptc-libnode
+          key: scriptc-libnode-0.4.7-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build ScriptC entries
+        id: scriptc
+        run: node --experimental-strip-types apps/server/scripts/scriptc-build.ts --exec --outdir dist-scriptc
+
+      - name: Skip publish when the compiler or libnode pack is missing
+        if: steps.scriptc.outputs.skipped == 'true'
+        run: |
+          echo "scriptc produced no binaries; not creating a GitHub Release." >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f dist-scriptc/.skipped ]]; then
+            cat dist-scriptc/.skipped >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Smoke native ACP binaries
+        if: steps.scriptc.outputs.skipped != 'true'
+        run: node --experimental-strip-types apps/server/scripts/scriptc-smoke.ts --outdir dist-scriptc
+
+      - name: Upload native artifacts
+        if: steps.scriptc.outputs.skipped != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3code-scriptc-native
+          path: |
+            dist-scriptc/acp-mcp-bridge
+            dist-scriptc/acp-mcp-bridge.libnode
+            dist-scriptc/acp-mcp-call
+            dist-scriptc/acp-mcp-call.libnode
+            dist-scriptc/manifest.json
+          if-no-files-found: error
+
+      - name: Archive ELFs with beside libnode packs
+        if: steps.scriptc.outputs.skipped != 'true' && startsWith(github.ref, 'refs/tags/')
+        run: tar -C dist-scriptc -czf t3code-scriptc-native.tar.gz acp-mcp-bridge acp-mcp-bridge.libnode acp-mcp-call acp-mcp-call.libnode manifest.json
+
+      - name: Publish GitHub Release
+        if: steps.scriptc.outputs.skipped != 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Native t3code-server ${{ github.ref_name }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist-scriptc/acp-mcp-bridge
+            dist-scriptc/acp-mcp-call
+            dist-scriptc/manifest.json
+            t3code-scriptc-native.tar.gz

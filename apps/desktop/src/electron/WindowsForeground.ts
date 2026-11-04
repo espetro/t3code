@@ -1,3 +1,5 @@
+import { loadFfiRs } from "@t3tools/shared/nativeFfi";
+
 export interface WindowsForegroundApi {
   readonly getCurrentThreadId: () => number;
   readonly getForegroundWindow: () => bigint;
@@ -67,7 +69,7 @@ let windowsForegroundApiPromise: Promise<WindowsForegroundApi> | undefined;
 const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
 export function loadWindowsForegroundApi(): Promise<WindowsForegroundApi> {
-  windowsForegroundApiPromise ??= import("ffi-rs").then(({ DataType, load, open }) => {
+  windowsForegroundApiPromise ??= loadFfiRs().then(({ DataType, load, open }) => {
     const kernel32 = "t3-kernel32";
     const user32 = "t3-user32";
     open({ library: kernel32, path: "kernel32.dll" });
