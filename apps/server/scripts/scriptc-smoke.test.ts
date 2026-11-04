@@ -42,9 +42,24 @@ it("fails when manifest scriptcVersion drifts from the pin", () => {
   NodeFS.chmodSync(NodePath.join(outdir, "acp-mcp-bridge"), 0o755);
   NodeFS.writeFileSync(
     NodePath.join(outdir, "manifest.json"),
-    `${JSON.stringify({ skipped: false, scriptcVersion: "0.0.0", files: [] }, null, 2)}\n`,
+    `${JSON.stringify({ skipped: false, scriptcVersion: "0.0.0", files: [], libnode: { recorded: true } }, null, 2)}\n`,
   );
   const result = run(["--outdir", outdir]);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("0.0.0");
+});
+
+it("fails when the compile wrote ELFs without a recorded libnode pack", () => {
+  const outdir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-scriptc-smoke-"));
+  NodeFS.writeFileSync(NodePath.join(outdir, "acp-mcp-call"), "#!/bin/sh\nexit 0\n");
+  NodeFS.writeFileSync(NodePath.join(outdir, "acp-mcp-bridge"), "#!/bin/sh\nexit 0\n");
+  NodeFS.chmodSync(NodePath.join(outdir, "acp-mcp-call"), 0o755);
+  NodeFS.chmodSync(NodePath.join(outdir, "acp-mcp-bridge"), 0o755);
+  NodeFS.writeFileSync(
+    NodePath.join(outdir, "manifest.json"),
+    `${JSON.stringify({ skipped: false, scriptcVersion: "0.4.7", files: [] }, null, 2)}\n`,
+  );
+  const result = run(["--outdir", outdir]);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("libnode");
 });

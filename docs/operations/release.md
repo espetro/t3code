@@ -674,12 +674,14 @@ archives. They do not use `vX.Y.Z` tags.
 
 1. From the commit to test: `git tag scriptc-v0.1.6-native.1 && git push origin scriptc-v0.1.6-native.1`
 2. `.github/workflows/scriptc-native.yml` runs `vp run --filter t3 build:scriptc -- --exec --outdir dist-scriptc`
-3. If `scriptc` is not on PATH, the job succeeds and **does not** open a GitHub Release
-4. If binaries exist, `scriptc-smoke.ts` compares `acp-mcp-call` to the Node entry and checks `manifest.json` `scriptcVersion` against the pin; a mismatch fails the job
-5. Those ELFs plus `manifest.json` attach to a GitHub **prerelease** named `Native t3code-server <tag>`
+3. If `scriptc` is missing, or no libnode pack can be recorded, the job succeeds and **does not** open a GitHub Release
+4. If binaries exist, `scriptc-smoke.ts` compares `acp-mcp-call` to the Node entry and checks `manifest.json` `scriptcVersion` plus a recorded libnode pack against the pin; a mismatch fails the job
+5. Those ELFs, their `.libnode/` beside packs, and `manifest.json` attach to a GitHub **prerelease** named `Native t3code-server <tag>`
 6. `workflow_dispatch` without a tag only uploads Actions artifacts
 
-Until ScriptC can compile those entries, step 3 is the expected outcome. The first successful compile is what publishes assets.
+ACP entries call into Node (`@scriptc/node`). `scriptc build` is invoked with `--libnode beside` and `SCRIPTC_LIBNODE` pointing at a `scriptc.libnode-pack.v1` directory. `@scriptc/libnode-*` is not on npm yet (vercel-labs/scriptc#2915). The build obtains the 0.4.7 development pack (scriptc's `fetch-dev-pack.mjs` + Node 24.22.1 libnode) into `apps/server/.scriptc-libnode/`, or skips if that fails. Set `SCRIPTC_LIBNODE` to override. Do not re-pin scriptc to pick up a pack published only for another compiler.
+
+scriptc 0.4.7's Node islands are **report-only** (`scriptc coverage` shows Effect as SC8001; the build does not embed a pack or island module tree). After compile, the driver probes the ELF; if it still says no pack was recorded, the job skips publish rather than attaching a dead binary.
 
 ## 5) Troubleshooting
 

@@ -39,6 +39,7 @@ function readManifest(outdir: string): {
   skipped: boolean;
   scriptcVersion?: string;
   files?: string[];
+  libnode?: { recorded?: boolean; placement?: string };
 } {
   const skippedPath = NodePath.join(outdir, ".skipped");
   if (NodeFS.existsSync(skippedPath)) {
@@ -52,6 +53,7 @@ function readManifest(outdir: string): {
     skipped: boolean;
     scriptcVersion?: string;
     files?: string[];
+    libnode?: { recorded?: boolean; placement?: string };
   };
 }
 
@@ -169,7 +171,7 @@ async function main(): Promise<void> {
   const { outdir } = parseArgs(process.argv.slice(2));
   const manifest = readManifest(outdir);
   if (manifest.skipped === true) {
-    process.stdout.write("scriptc smoke: skipped (compiler produced no ELFs)\n");
+    process.stdout.write("scriptc smoke: skipped (no runnable native ELFs)\n");
     return;
   }
   if (manifest.scriptcVersion !== SCRIPTC_PINNED_VERSION) {
@@ -177,12 +179,22 @@ async function main(): Promise<void> {
       `scriptc smoke: manifest scriptcVersion ${JSON.stringify(manifest.scriptcVersion)} !== pin ${SCRIPTC_PINNED_VERSION}`,
     );
   }
+  if (manifest.libnode?.recorded !== true) {
+    fail("scriptc smoke: manifest has no recorded libnode pack; refusing to run a dead ELF");
+  }
   const elf = NodePath.join(outdir, "acp-mcp-call");
   const bridge = NodePath.join(outdir, "acp-mcp-bridge");
   for (const path of [elf, bridge]) {
     if (!NodeFS.existsSync(path)) fail(`scriptc smoke: missing ELF ${path}`);
     const mode = NodeFS.statSync(path).mode;
     if ((mode & 0o111) === 0) fail(`scriptc smoke: ${path} is not executable`);
+  }
+  if (manifest.libnode?.placement === "beside") {
+    for (const path of [`${elf}.libnode`, `${bridge}.libnode`]) {
+      if (!NodeFS.existsSync(NodePath.join(path, "manifest.json"))) {
+        fail(`scriptc smoke: missing beside pack ${path}`);
+      }
+    }
   }
 
   const cleanEnv = { ...process.env };

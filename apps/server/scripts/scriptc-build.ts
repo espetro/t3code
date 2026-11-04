@@ -5,6 +5,10 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { resolveLibnodePack, SCRIPTC_PINNED_VERSION } from "./scriptc-libnode.ts";
+
+export { SCRIPTC_PINNED_VERSION };
+
 const serverDir = NodePath.join(NodeURL.fileURLToPath(new URL(".", import.meta.url)), "..");
 
 /** First ScriptC targets: ACP fast paths spawned per session/tool call today. */
@@ -12,9 +16,6 @@ const SCRIPTC_ENTRIES = [
   { name: "acp-mcp-bridge", source: "src/scriptc/acpMcpBridge.ts" },
   { name: "acp-mcp-call", source: "src/scriptc/acpMcpCall.ts" },
 ] as const;
-
-/** scriptc's runtime pack ABI moves every release; the build only works against this one. */
-export const SCRIPTC_PINNED_VERSION = "0.4.7";
 
 const SKIPPED_MARKER = ".skipped";
 
@@ -64,8 +65,22 @@ function writeGitHubOutput(values: Record<string, string>): void {
   NodeFS.appendFileSync(outputPath, lines.join(""));
 }
 
+function elfReportsUnrecordedPack(elf: string): boolean {
+  const env = { ...process.env };
+  delete env.SCRIPTC_LIBNODE;
+  const result = NodeChildProcess.spawnSync(elf, [], {
+    encoding: "utf8",
+    env,
+    timeout: 10_000,
+  });
+  if (result.error !== undefined) return false;
+  return `${result.stderr}${result.stdout}`.includes("no libnode pack was recorded at build time");
+}
+
 function skip(outdir: string, reason: string): void {
   NodeFS.mkdirSync(outdir, { recursive: true });
+  const manifestPath = NodePath.join(outdir, "manifest.json");
+  if (NodeFS.existsSync(manifestPath)) NodeFS.rmSync(manifestPath);
   NodeFS.writeFileSync(
     NodePath.join(outdir, SKIPPED_MARKER),
     `${JSON.stringify({ skipped: true, reason }, null, 2)}\n`,
@@ -99,7 +114,7 @@ function scriptcVersion(binary: string): string | null {
   return version.length > 0 ? version : null;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const { exec, outdir, names } = parseArgs(process.argv.slice(2));
   const entries = selectedEntries(names).map((entry) => ({
     ...entry,
@@ -127,10 +142,16 @@ function main(): void {
   }
   if (version !== SCRIPTC_PINNED_VERSION) {
     process.stderr.write(
-      `scriptc ${version} does not match the pinned ${SCRIPTC_PINNED_VERSION}; update apps/server/package.json and scripts/scriptc-build.ts together.\n`,
+      `scriptc ${version} does not match the pinned ${SCRIPTC_PINNED_VERSION}; update apps/server/package.json and scripts/scriptc-libnode.ts together.\n`,
     );
     process.exitCode = 1;
     writeGitHubOutput({ skipped: "true", files: "" });
+    return;
+  }
+
+  const libnode = await resolveLibnodePack({ projectDir: serverDir, pin: version });
+  if (!libnode.ok) {
+    skip(outdir, libnode.reason);
     return;
   }
 
@@ -142,9 +163,10 @@ function main(): void {
   for (const entry of entries) {
     const spawned = NodeChildProcess.spawnSync(
       binary,
-      ["build", entry.sourcePath, "--out", entry.outfile],
+      ["build", entry.sourcePath, "--out", entry.outfile, "--libnode", "beside"],
       {
         cwd: serverDir,
+        env: { ...process.env, SCRIPTC_LIBNODE: libnode.pack.directory },
         stdio: "inherit",
       },
     );
@@ -162,13 +184,45 @@ function main(): void {
     produced.push(entry.outfile);
   }
 
+  const unrecorded = produced.find((elf) => elfReportsUnrecordedPack(elf));
+  if (unrecorded !== undefined) {
+    skip(
+      outdir,
+      `scriptc ${version} compiled ${unrecorded} but did not record a libnode pack (Node islands are report-only in this compiler; Effect is SC8001). The ${libnode.pack.nodeVersion} pack is at ${libnode.pack.directory}; the ELF still cannot load @scriptc/node until the compiler embeds the island module manifest.`,
+    );
+    return;
+  }
+
+  const beside = produced.every((elf) =>
+    NodeFS.existsSync(NodePath.join(`${elf}.libnode`, "manifest.json")),
+  );
+
   NodeFS.writeFileSync(
     NodePath.join(outdir, "manifest.json"),
-    `${JSON.stringify({ skipped: false, scriptcVersion: version, files: produced }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        skipped: false,
+        scriptcVersion: version,
+        files: produced,
+        libnode: {
+          recorded: true,
+          placement: beside ? "beside" : "path",
+          directory: libnode.pack.directory,
+          source: libnode.pack.source,
+          packageName: libnode.pack.packageName,
+          nodeVersion: libnode.pack.nodeVersion,
+          platform: libnode.pack.platform,
+          arch: libnode.pack.arch,
+          schema: libnode.pack.schema,
+        },
+      },
+      null,
+      2,
+    )}\n`,
   );
   writeGitHubOutput({ skipped: "false", files: produced.join("\n") });
 }
 
 if (import.meta.main === true || process.argv[1]?.endsWith("scriptc-build.ts")) {
-  main();
+  await main();
 }

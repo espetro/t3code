@@ -20,6 +20,7 @@
     "build:bundle": "vp pack",
     "build:exe": "node scripts/cli.ts build-exe",
     "build:scriptc": "node --experimental-strip-types scripts/scriptc-build.ts",
+    "obtain:scriptc-libnode": "node --experimental-strip-types scripts/scriptc-libnode.ts",
     "start": "node dist/bin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
