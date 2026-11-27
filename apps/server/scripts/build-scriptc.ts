@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 /**
- * From apps/server: scriptc build src/binScriptc.ts --npm-static=effect -o dist/t3
- * Compiles TypeScript source, not vp pack output. Writes src/tsconfig.json so
- * scriptc sees noImplicitOverride: false without a symlink (a link to
- * tsconfig.scriptc.json makes extends "./tsconfig.json" resolve to itself).
- * Overlay paths stub generated Codex/ACP Schema barrels (~2.5MB) out of the
- * checker program; adapters keep their runtime source.
+ * scriptc build of src/binScriptc.ts. Writes src/tsconfig.json (no symlink: overlay
+ * extends "./tsconfig.json" would loop). Overlay stubs generated Schema barrels.
  */
 // @effect-diagnostics nodeBuiltinImport:off -- Host-side scriptc driver.
 import * as NodeChildProcess from "node:child_process";
@@ -19,7 +15,8 @@ const repoRoot = NodePath.resolve(serverDir, "../..");
 const overlayPath = NodePath.join(serverDir, "tsconfig.scriptc.json");
 const nearestTsconfig = NodePath.join(srcDir, "tsconfig.json");
 const stubDir = NodePath.join(srcDir, "scriptc-stubs");
-const entry = NodePath.join(srcDir, "binScriptc.ts");
+const entryFile = process.env.SCRIPTC_ENTRY ?? "binScriptc.ts";
+const entry = NodePath.join(srcDir, entryFile);
 const out = NodePath.join(serverDir, "dist", "t3");
 const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
   {
@@ -257,7 +254,9 @@ async function main(): Promise<number> {
             "#t3/adapter-infra": [
               "./provider/ProviderOrchestrationAdapterInfrastructure.native.ts",
             ],
-            "#t3/source-control-definitions": ["./sourceControl/sourceControlDefinitions.native.ts"],
+            "#t3/source-control-definitions": [
+              "./sourceControl/sourceControlDefinitions.native.ts",
+            ],
             "#t3/git-manager": ["./git/GitManager.native.ts"],
             "#t3/git-vcs-driver": ["./vcs/GitVcsDriver.native.ts"],
             "#t3/pull-request-service": ["./pullRequest/PullRequestService.native.ts"],
@@ -282,7 +281,7 @@ async function main(): Promise<number> {
             ...schemaPaths,
           },
         },
-        include: ["binScriptc.ts"],
+        include: [entryFile],
         exclude: [
           "**/*.test.ts",
           "**/*.testkit.ts",
@@ -321,12 +320,14 @@ async function main(): Promise<number> {
           GOGC: process.env.GOGC ?? "50",
           SCRIPTC_CHECK_STREAM_MODE: process.env.SCRIPTC_CHECK_STREAM_MODE ?? "1",
           SCRIPTC_INCR_LOWERING: process.env.SCRIPTC_INCR_LOWERING ?? "1",
+          SCRIPTC_LIBNODE:
+            process.env.SCRIPTC_LIBNODE ??
+            `${process.env.HOME ?? ""}/.nvm/versions/node/v24.13.1/lib/node_modules/@scriptc/libnode-linux-x64-gnu`,
         },
       },
     );
     process.stderr.write(`scriptc pid=${String(child.pid ?? "none")} overlay-driver\n`);
-    const ticker =
-      child.pid === undefined ? undefined : releaseCheckersIfHostIsStarving(child.pid);
+    const ticker = child.pid === undefined ? undefined : releaseCheckersIfHostIsStarving(child.pid);
     const result = await new Promise<{
       status: number | null;
       signal: NodeJS.Signals | null;
