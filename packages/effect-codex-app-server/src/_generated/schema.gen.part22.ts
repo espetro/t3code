@@ -109,9 +109,7 @@ import {
   V2HooksListResponse__HooksListEntry,
   V2ModelListResponse__Model,
 } from "./schema.gen.part12.ts";
-import {
-  V2ConfigWriteResponse__OverriddenMetadata,
-} from "./schema.gen.part13.ts";
+import { V2ConfigWriteResponse__OverriddenMetadata } from "./schema.gen.part13.ts";
 import {
   V2ItemCompletedNotification__ThreadItem,
   V2ItemStartedNotification__ThreadItem,

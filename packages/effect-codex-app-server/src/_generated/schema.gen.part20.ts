@@ -159,9 +159,7 @@ import {
   PermissionsRequestApprovalParams__RequestPermissionProfile,
   PermissionsRequestApprovalResponse__GrantedPermissionProfile,
 } from "./schema.gen.part18.ts";
-import {
-  McpServerElicitationRequestParams__McpElicitationSchema,
-} from "./schema.gen.part19.ts";
+import { McpServerElicitationRequestParams__McpElicitationSchema } from "./schema.gen.part19.ts";
 
 export type ClientRequest =
   | {

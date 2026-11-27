@@ -76,10 +76,7 @@ export const splitGeneratedSchemaFile = (filePath: string) => {
     written.push({ name: partName, names });
   }
 
-  NodeFS.writeFileSync(
-    path,
-    written.map((part) => `export * from "./${part.name}";\n`).join(""),
-  );
+  NodeFS.writeFileSync(path, written.map((part) => `export * from "./${part.name}";\n`).join(""));
 };
 
 const cliTarget = process.argv[1]?.includes("split-generated-schema") ? process.argv[2] : undefined;

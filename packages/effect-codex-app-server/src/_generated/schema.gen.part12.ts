@@ -68,9 +68,7 @@ import {
   V2ThreadItemsListResponse__ImageDetail,
   V2ThreadListResponse__ImageDetail,
 } from "./schema.gen.part3.ts";
-import {
-  V2ThreadMetadataUpdateResponse__ImageDetail,
-} from "./schema.gen.part4.ts";
+import { V2ThreadMetadataUpdateResponse__ImageDetail } from "./schema.gen.part4.ts";
 import {
   PermissionsRequestApprovalResponse__FileSystemSpecialPath,
   ServerNotification__AppMetadata,

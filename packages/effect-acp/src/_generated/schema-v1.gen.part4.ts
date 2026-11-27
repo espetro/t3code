@@ -22,14 +22,8 @@ import {
   PlanEntry,
   PlanUpdateContent,
 } from "./schema-v1.gen.part1.ts";
-import {
-  NesTextEdit,
-  SessionConfigSelectOptions,
-  ToolCallContent,
-} from "./schema-v1.gen.part2.ts";
-import {
-  Content,
-} from "./schema-v1.gen.part3.ts";
+import { NesTextEdit, SessionConfigSelectOptions, ToolCallContent } from "./schema-v1.gen.part2.ts";
+import { Content } from "./schema-v1.gen.part3.ts";
 
 export type IntegerPropertySchema = {
   readonly title?: string | null;

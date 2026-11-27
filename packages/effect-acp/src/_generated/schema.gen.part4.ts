@@ -81,10 +81,7 @@ import {
   SessionConfigSelectOptions,
   ToolCallContent,
 } from "./schema.gen.part2.ts";
-import {
-  SuggestNesRequest,
-  ToolCallUpdate,
-} from "./schema.gen.part3.ts";
+import { SuggestNesRequest, ToolCallUpdate } from "./schema.gen.part3.ts";
 
 export type ClientNotification = {
   readonly method: string;

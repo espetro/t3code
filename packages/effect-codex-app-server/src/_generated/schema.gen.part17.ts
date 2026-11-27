@@ -12,9 +12,7 @@ import {
   ServerNotification__TurnItemsView,
   ServerNotification__TurnStatus,
 } from "./schema.gen.part0.ts";
-import {
-  ServerRequest__LegacyAppPathString,
-} from "./schema.gen.part1.ts";
+import { ServerRequest__LegacyAppPathString } from "./schema.gen.part1.ts";
 import {
   V2ThreadUnarchiveResponse__AbsolutePathBuf,
   V2ThreadUnarchiveResponse__AgentMessageDelivery,

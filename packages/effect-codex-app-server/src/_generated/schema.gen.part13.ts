@@ -65,9 +65,7 @@ import {
   ServerNotification__SandboxPolicy,
   V2ConfigReadResponse__ComputerUseMacosConfig,
 } from "./schema.gen.part7.ts";
-import {
-  V2ConfigRequirementsReadResponse__ComputerUseMacosRequirements,
-} from "./schema.gen.part8.ts";
+import { V2ConfigRequirementsReadResponse__ComputerUseMacosRequirements } from "./schema.gen.part8.ts";
 import {
   V2ThreadReadResponse__CodexErrorInfo,
   V2ThreadReadResponse__FunctionCallOutputContentItem,

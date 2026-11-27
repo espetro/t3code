@@ -53,9 +53,7 @@ import {
   V2ThreadUnarchiveResponse__ThreadHistoryMode,
   V2ThreadUnarchiveResponse__ThreadSource,
 } from "./schema.gen.part5.ts";
-import {
-  ServerNotification__GuardianApprovalReview,
-} from "./schema.gen.part7.ts";
+import { ServerNotification__GuardianApprovalReview } from "./schema.gen.part7.ts";
 import {
   V2ThreadResumeResponse__ThreadSection,
   V2ThreadResumeResponse__ThreadStatus,

@@ -92,19 +92,13 @@ import {
   V2ThreadStatusChangedNotification__ThreadStatus,
   V2ThreadTokenUsageUpdatedNotification__ThreadTokenUsage,
 } from "./schema.gen.part10.ts";
-import {
-  V2TurnPlanUpdatedNotification__TurnPlanStep,
-} from "./schema.gen.part11.ts";
+import { V2TurnPlanUpdatedNotification__TurnPlanStep } from "./schema.gen.part11.ts";
 import {
   V2ThreadResumeParams__FunctionCallOutputBody,
   V2ThreadResumeResponse__CollaborationMode,
 } from "./schema.gen.part13.ts";
-import {
-  V2SkillsListResponse__SkillsListEntry,
-} from "./schema.gen.part14.ts";
-import {
-  V2ThreadSettingsUpdatedNotification__ThreadSettings,
-} from "./schema.gen.part16.ts";
+import { V2SkillsListResponse__SkillsListEntry } from "./schema.gen.part14.ts";
+import { V2ThreadSettingsUpdatedNotification__ThreadSettings } from "./schema.gen.part16.ts";
 import {
   V2ThreadForkResponse__Thread,
   V2ThreadItemsListResponse__ThreadItemEntry,

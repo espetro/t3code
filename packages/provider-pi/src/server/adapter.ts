@@ -81,11 +81,6 @@ import {
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
-import { bindHandleSessionEvent } from "./adapter.handleSessionEvent.ts";
-import { bindHandleExtensionUiRequest } from "./adapter.handleExtensionUiRequest.ts";
-import { bindFinalizeTurn } from "./adapter.finalizeTurn.ts";
-import { bindEmitToolItem } from "./adapter.emitToolItem.ts";
-import { bindApplySelection } from "./adapter.applySelection.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -1410,53 +1405,126 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           });
         });
 
-      const emitToolItem = bindEmitToolItem({
-          get PI_PROVIDER() {
-            return PI_PROVIDER;
-          },
-          get baseItemFields() {
-            return baseItemFields;
-          },
-          get completedAt() {
-            return completedAt;
-          },
-          get content() {
-            return content;
-          },
-          get contentText() {
-            return contentText;
-          },
-          get details() {
-            return details;
-          },
-          get emit() {
-            return emit;
-          },
-          get emitCommandOutputDelta() {
-            return emitCommandOutputDelta;
-          },
-          get emitItemNode() {
-            return emitItemNode;
-          },
-          get now() {
-            return now;
-          },
-          get path() {
-            return path;
-          },
-          get piToolOutput() {
-            return piToolOutput;
-          },
-          get result() {
-            return result;
-          },
-          get start() {
-            return start;
-          },
-          get updated() {
-            return updated;
+      const emitToolItem = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        event: PiRpcRecord,
+        phase: "start" | "update" | "end",
+      ) {
+        const toolCallId = recordString(event, "toolCallId");
+        const toolName = recordString(event, "toolName") ?? "tool";
+        // Pi tags every phase of a call made through ctx.executeTool, such as from a codemode script.
+        const parentToolCallId = recordString(event, "parentToolCallId");
+        if (toolCallId === undefined) return;
+        if (phase === "update" && (toolName === "bash" || toolName === "powershell")) {
+          yield* emitCommandOutputDelta(turn, toolCallId, event["partialResult"]);
+          return;
+        }
+        if (phase === "start") {
+          turn.toolArgs.set(toolCallId, event["args"]);
+        }
+        const args = event["args"] ?? turn.toolArgs.get(toolCallId);
+        const emittedAt = yield* DateTime.now;
+        const startedAt = turn.toolStartedAt.get(toolCallId) ?? emittedAt;
+        turn.toolStartedAt.set(toolCallId, startedAt);
+        const completed = phase === "end";
+        const isError = event["isError"] === true;
+        const resultRecord = completed ? event["result"] : event["partialResult"];
+        const outputText = contentText(recordField(resultRecord, "content"));
+        const status = completed
+          ? isError
+            ? turn.interrupted
+              ? "interrupted"
+              : "failed"
+            : "completed"
+          : "running";
+        const base = baseItemFields(turn, toolCallId, startedAt, emittedAt, parentToolCallId);
+        yield* emitItemNode(
+          turn,
+          toolCallId,
+          "tool_call",
+          status,
+          startedAt,
+          completed ? emittedAt : null,
+          parentToolCallId,
+        );
+        const shared = {
+          ...base,
+          status,
+          completedAt: completed ? emittedAt : null,
+        } as const;
+        if (toolName === "bash" || toolName === "powershell") {
+          const exitCode =
+            recordNumber(recordField(resultRecord, "structuredContent"), "exit_code") ??
+            recordNumber(recordField(resultRecord, "details"), "exitCode");
+          yield* emit({
+            type: "turn_item.updated",
+            driver: PI_PROVIDER,
+            turnItem: {
+              ...shared,
+              title: toolName,
+              type: "command_execution",
+              input: recordString(args, "command") ?? "",
+              ...(outputText.length > 0 ? { output: outputText } : {}),
+              ...(exitCode === undefined ? {} : { exitCode }),
+            },
+          });
+          return;
+        }
+        if (toolName === "edit" || toolName === "write") {
+          const fileName = recordString(args, "path") ?? recordString(args, "file_path");
+          if (fileName !== undefined) {
+            const diffStr =
+              recordString(recordField(resultRecord, "details"), "patch") ??
+              (isError && outputText.trim().length > 0 ? outputText : undefined);
+            const newStr = toolName === "write" ? recordString(args, "content") : undefined;
+            yield* emit({
+              type: "turn_item.updated",
+              driver: PI_PROVIDER,
+              turnItem: {
+                ...shared,
+                title: toolName,
+                type: "file_change",
+                fileName,
+                ...(diffStr === undefined ? {} : { diffStr }),
+                ...(newStr === undefined ? {} : { newStr }),
+              },
+            });
+            return;
           }
+        }
+        const output = piToolOutput(resultRecord, toolName);
+        // Pi strips @ only at the start of the raw argument, before preview trimming.
+        const readPath =
+          toolName === "read"
+            ? (recordString(args, "path") ?? recordString(args, "file_path"))
+                ?.replace(/^@/, "")
+                .trim()
+            : undefined;
+        const viewedImagePath =
+          readPath &&
+          readPath.length <= 4096 &&
+          !/[\r\n]/.test(readPath) &&
+          isWorkspaceImagePreviewPath(readPath)
+            ? readPath
+            : undefined;
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: {
+            ...shared,
+            title: toolName,
+            type: "dynamic_tool",
+            ...mcpToolPresentation({ toolName }),
+            toolName,
+            input: args ?? {},
+            ...(output === undefined ? {} : { output }),
+            ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
+          },
         });
+        if (toolName === "subagent") {
+          yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
+        }
+      });
 
       const emitSubagentTasks = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
@@ -1761,80 +1829,187 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         );
       });
 
-      const handleExtensionUiRequest = bindHandleExtensionUiRequest({
-          get PI_PROVIDER() {
-            return PI_PROVIDER;
-          },
-          get completedAt() {
-            return completedAt;
-          },
-          get connection() {
-            return connection;
-          },
-          get customAnswerFollowUps() {
-            return customAnswerFollowUps;
-          },
-          get emit() {
-            return emit;
-          },
-          get emitSystemNotice() {
-            return emitSystemNotice;
-          },
-          get events() {
-            return events;
-          },
-          get id() {
-            return id;
-          },
-          get idAllocator() {
-            return idAllocator;
-          },
-          get itemOrdinal() {
-            return itemOrdinal;
-          },
-          get ordinal() {
-            return ordinal;
-          },
-          get parentNodeId() {
-            return parentNodeId;
-          },
-          get pendingPrompts() {
-            return pendingPrompts;
-          },
-          get piApprovalRequestKind() {
-            return piApprovalRequestKind;
-          },
-          get providerRef() {
-            return providerRef;
-          },
-          get runId() {
-            return runId;
-          },
-          get scope() {
-            return scope;
-          },
-          get sessionApprovals() {
-            return sessionApprovals;
-          },
-          get startedAt() {
-            return startedAt;
-          },
-          get status() {
-            return status;
-          },
-          get threadState() {
-            return threadState;
-          },
-          get updateAsyncSubagents() {
-            return updateAsyncSubagents;
-          },
-          get updated() {
-            return updated;
-          },
-          get updatedAt() {
-            return updatedAt;
-          }
+      const handleExtensionUiRequest = Effect.fnUntraced(function* (event: PiRpcRecord) {
+        const method = recordString(event, "method");
+        const nativeRequestId = recordString(event, "id");
+        if (method === undefined) return;
+        if (method === "notify") {
+          const state = threadState;
+          const turn = state?.activeTurn ?? null;
+          const message = recordString(event, "message") ?? "";
+          if (turn === null || message.length === 0) return;
+          const notifyType = recordString(event, "notifyType");
+          yield* emitSystemNotice(
+            turn,
+            `notify:${turn.providerTurn.id}:${turn.nextItemOrdinal}`,
+            message,
+            notifyType === "warning" || notifyType === "error" ? notifyType : "info",
+          );
+          return;
+        }
+        if (method === "setWidget" && recordString(event, "widgetKey") === "subagent-async") {
+          yield* updateAsyncSubagents(event);
+          return;
+        }
+        if (
+          method !== "select" &&
+          method !== "confirm" &&
+          method !== "input" &&
+          method !== "editor"
+        ) {
+          yield* Effect.logDebug("Ignoring pi extension UI update.", { method });
+          return;
+        }
+        if (nativeRequestId === undefined) return;
+        // The extension's follow-up input has an empty placeholder; its multi-select input does not.
+        const inputTitle =
+          method === "input" && event["placeholder"] === ""
+            ? (recordString(event, "title") ?? "")
+            : "";
+        const followUpPrefix = Array.from(customAnswerFollowUps.keys())
+          .filter((prefix) => inputTitle.startsWith(prefix))
+          .reduce<string | undefined>(
+            (longest, prefix) => (prefix.length > (longest?.length ?? -1) ? prefix : longest),
+            undefined,
+          );
+        if (followUpPrefix !== undefined) {
+          const queued = customAnswerFollowUps.get(followUpPrefix) ?? [];
+          const value = queued.shift() ?? "";
+          if (queued.length === 0) customAnswerFollowUps.delete(followUpPrefix);
+          yield* connection.send({ type: "extension_ui_response", id: nativeRequestId, value });
+          return;
+        }
+        const approvalTitle = recordString(event, "title") ?? "";
+        const approvalKey = `${approvalTitle.length}:${approvalTitle}${recordString(event, "message") ?? ""}`;
+        if (method === "confirm" && sessionApprovals.has(approvalKey)) {
+          yield* connection.send({
+            type: "extension_ui_response",
+            id: nativeRequestId,
+            confirmed: true,
+          });
+          return;
+        }
+        const state = threadState;
+        const turn = state?.activeTurn ?? null;
+        const createdAt = yield* DateTime.now;
+        const timeout = recordNumber(event, "timeout");
+        // Pi treats zero as no timeout and negative durations as immediate expiry.
+        const expiresAt =
+          timeout === undefined || timeout === 0
+            ? null
+            : DateTime.toEpochMillis(createdAt) + Math.max(0, timeout);
+        const requestId = yield* idAllocator.allocate.runtimeRequest({
+          driver: PI_PROVIDER,
+          ...(turn === null ? {} : { providerTurnId: turn.providerTurn.id }),
+          nativeRequestId,
         });
+        const nodeId = idAllocator.derive.approvalNode({ requestId });
+        const title = recordString(event, "title") ?? method;
+        const threadId =
+          turn?.turnInput.threadId ?? state?.providerThread.appThreadId ?? input.threadId;
+        const providerThreadId = state?.providerThread.id ?? null;
+        const providerTurnId = turn?.providerTurn.id ?? null;
+        const runtimeRequest: OrchestrationV2RuntimeRequest = {
+          id: requestId,
+          nodeId,
+          providerTurnId,
+          nativeRequestRef: providerRef(nativeRequestId),
+          kind: method === "confirm" ? "command" : "user_input",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId: input.providerSessionId },
+          createdAt,
+          resolvedAt: null,
+        };
+        const node: OrchestrationV2ExecutionNode = {
+          id: nodeId,
+          threadId,
+          runId: turn?.turnInput.runId ?? null,
+          parentNodeId: turn?.turnInput.rootNodeId ?? null,
+          rootNodeId: turn?.turnInput.rootNodeId ?? nodeId,
+          kind: method === "confirm" ? "approval_request" : "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: providerRef(nativeRequestId),
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: createdAt,
+          completedAt: null,
+        };
+        const itemBase = {
+          id: idAllocator.derive.approvalTurnItem({ requestId }),
+          threadId,
+          runId: turn?.turnInput.runId ?? null,
+          nodeId,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: providerRef(nativeRequestId),
+          parentItemId: null,
+          ordinal: turn === null ? 0 : itemOrdinal(turn, nativeRequestId),
+          status: "waiting" as const,
+          title,
+          startedAt: createdAt,
+          completedAt: null,
+          updatedAt: createdAt,
+        };
+        const askUser =
+          method === "select" && turn !== null
+            ? piAskUserSingleSelectQuestion(nativeRequestId, title, event, turn.toolArgs)
+            : undefined;
+        const turnItem: OrchestrationV2TurnItem =
+          method === "confirm"
+            ? {
+                ...itemBase,
+                type: "approval_request",
+                requestId,
+                requestKind: piApprovalRequestKind(title),
+                prompt: recordString(event, "message") ?? title,
+              }
+            : {
+                ...itemBase,
+                type: "user_input_request",
+                requestId,
+                questions: [askUser?.question ?? piQuestion(nativeRequestId, method, title, event)],
+              };
+        const pending: PendingPiPrompt = {
+          nativeRequestId,
+          method,
+          questionId: nativeRequestId,
+          approvalKey,
+          expiresAt,
+          expirationFiber: null,
+          runtimeRequest,
+          node,
+          turnItem,
+          customAnswerRoute: askUser?.customAnswerRoute,
+        };
+        pendingPrompts.set(String(requestId), pending);
+        yield* emit({
+          type: "runtime_request.updated",
+          driver: PI_PROVIDER,
+          threadId,
+          runtimeRequest,
+        });
+        yield* emit({ type: "node.updated", driver: PI_PROVIDER, node });
+        yield* emit({ type: "turn_item.updated", driver: PI_PROVIDER, turnItem });
+        if (expiresAt !== null) {
+          const now = yield* DateTime.now;
+          pending.expirationFiber = yield* Effect.sleep(
+            Duration.millis(Math.max(0, expiresAt - DateTime.toEpochMillis(now))),
+          ).pipe(
+            Effect.andThen(
+              Queue.offer(connection.events, {
+                type: "t3.ui_request_expired",
+                requestId: String(requestId),
+                pending,
+              }),
+            ),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          );
+        }
+      });
 
       const emitExtensionError = Effect.fnUntraced(function* (event: PiRpcRecord) {
         const state = threadState;
@@ -1920,89 +2095,127 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         };
       });
 
-      const finalizeTurn = bindFinalizeTurn({
-          get PI_PROVIDER() {
-            return PI_PROVIDER;
-          },
-          get baseItemFields() {
-            return baseItemFields;
-          },
-          get cancelPendingPrompts() {
-            return cancelPendingPrompts;
-          },
-          get captureTurnTreeRefs() {
-            return captureTurnTreeRefs;
-          },
-          get closed() {
-            return closed;
-          },
-          get completeOpenStreamItems() {
-            return completeOpenStreamItems;
-          },
-          get completed() {
-            return completed;
-          },
-          get emit() {
-            return emit;
-          },
-          get emitCompaction() {
-            return emitCompaction;
-          },
-          get emitProviderRetry() {
-            return emitProviderRetry;
-          },
-          get emitSteerStatus() {
-            return emitSteerStatus;
-          },
-          get failed() {
-            return failed;
-          },
-          get id() {
-            return id;
-          },
-          get itemOrdinal() {
-            return itemOrdinal;
-          },
-          get message() {
-            return message;
-          },
-          get model() {
-            return model;
-          },
-          get now() {
-            return now;
-          },
-          get piAsyncRuns() {
-            return piAsyncRuns;
-          },
-          get providerRef() {
-            return providerRef;
-          },
-          get providerTurnId() {
-            return providerTurnId;
-          },
-          get readTokenUsage() {
-            return readTokenUsage;
-          },
-          get run() {
-            return run;
-          },
-          get startedAt() {
-            return startedAt;
-          },
-          get state() {
-            return state;
-          },
-          get updateProviderSession() {
-            return updateProviderSession;
-          },
-          get updateProviderThread() {
-            return updateProviderThread;
-          },
-          get updated() {
-            return updated;
+      const finalizeTurn = Effect.fnUntraced(function* (state: PiThreadState, readUsage = true) {
+        const turn = state.activeTurn;
+        if (turn === null) return;
+        state.activeTurn = null;
+        const interrupted = turn.interrupted || turn.nativeAborted;
+        const completedAt = yield* DateTime.now;
+        yield* completeOpenStreamItems(turn);
+        if (turn.activeCompaction !== null) {
+          const status = interrupted ? "cancelled" : turn.failure === null ? "completed" : "failed";
+          yield* emitCompaction(turn, turn.activeCompaction, status);
+          turn.activeCompaction = null;
+        }
+        if (turn.activeProviderRetry !== null) {
+          if (interrupted) {
+            yield* emitProviderRetry(turn, turn.activeProviderRetry, "interrupted", completedAt);
+            turn.activeProviderRetry = null;
+          } else if (turn.failure === null) {
+            yield* emitProviderRetry(turn, turn.activeProviderRetry, "completed", completedAt);
+            turn.activeProviderRetry = null;
           }
+        }
+        yield* cancelPendingPrompts(completedAt);
+        // Stop clears Pi's queue, so an unread steer was dropped; otherwise Pi read it before settling.
+        for (const messageId of turn.unreadSteers.splice(0)) {
+          yield* emitSteerStatus(turn, messageId, interrupted ? "cancelled" : "completed");
+        }
+        const treeRefs =
+          turn.stopTreeRefs !== undefined ? turn.stopTreeRefs : yield* captureTurnTreeRefs();
+        const tokenUsage = readUsage ? yield* readTokenUsage(turn, completedAt) : undefined;
+        const failure = interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
+        yield* emit({
+          type: "provider_turn.updated",
+          driver: PI_PROVIDER,
+          threadId: turn.turnInput.threadId,
+          providerTurn: {
+            ...turn.providerTurn,
+            ...(treeRefs === null || treeRefs.nativeTurnRef === undefined
+              ? {}
+              : { nativeTurnRef: treeRefs.nativeTurnRef }),
+            ...(state.providerThread.nativeThreadRef === null
+              ? {}
+              : { nativeThreadRef: state.providerThread.nativeThreadRef }),
+            status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
+            completedAt,
+            ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            ...(turn.reportedModel === undefined ? {} : { model: turn.reportedModel }),
+          },
         });
+        yield* updateProviderThread(
+          state,
+          {
+            status: "idle",
+            ...(treeRefs === null
+              ? {}
+              : {
+                  nativeConversationHeadRef:
+                    treeRefs.leafId === null ? null : providerRef(treeRefs.leafId),
+                }),
+          },
+          treeRefs?.retainedNativeTurnIds,
+        );
+        yield* updateProviderSession(
+          failure !== null ? "error" : "ready",
+          failure?.message ?? null,
+        );
+        if (failure !== null) {
+          const failureItemId = `terminal-failure:${turn.providerTurn.id}`;
+          if (turn.activeProviderRetry !== null) {
+            yield* emitProviderRetry(
+              turn,
+              { ...turn.activeProviderRetry, failure },
+              "failed",
+              completedAt,
+            );
+          } else {
+            yield* emit({
+              type: "turn_item.updated",
+              driver: PI_PROVIDER,
+              turnItem: {
+                ...baseItemFields(turn, failureItemId, completedAt, completedAt),
+                status: "failed",
+                title: null,
+                completedAt,
+                type: "error",
+                failure,
+              },
+            });
+          }
+          yield* emit({
+            type: "turn.terminal",
+            driver: PI_PROVIDER,
+            providerThreadId: state.providerThread.id,
+            providerTurnId: turn.providerTurn.id,
+            runOrdinal: turn.turnInput.runOrdinal,
+            failureItemOrdinal: itemOrdinal(turn, failureItemId),
+            status: "failed",
+            failure,
+            ...(!closed && [...piAsyncRuns.values()].some((run) => run.turn === turn)
+              ? { childTurnsContinue: true }
+              : {}),
+            ...(turn.activeProviderRetry === null
+              ? {}
+              : {
+                  retry: turn.activeProviderRetry.retry,
+                  retryStartedAt: turn.activeProviderRetry.startedAt,
+                }),
+            threadDisposition: "reusable",
+          });
+        } else {
+          yield* emit({
+            type: "turn.terminal",
+            driver: PI_PROVIDER,
+            providerThreadId: state.providerThread.id,
+            providerTurnId: turn.providerTurn.id,
+            runOrdinal: turn.turnInput.runOrdinal,
+            status: interrupted ? "interrupted" : "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+        }
+      });
 
       // Extensions can move Pi to another session file (ctx.newSession); resume that one.
       const adoptLiveSessionFile = (state: PiThreadState, stateData: unknown) => {
@@ -2060,227 +2273,575 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         yield* connection.terminate;
       });
 
-      const handleSessionEvent = bindHandleSessionEvent({
-          get PI_COMPACTING_PROMPT_REJECTION() {
-            return PI_COMPACTING_PROMPT_REJECTION;
-          },
-          get PI_PROVIDER() {
-            return PI_PROVIDER;
-          },
-          get PI_UNSOLICITED_ACTIVITY_ERROR() {
-            return PI_UNSOLICITED_ACTIVITY_ERROR;
-          },
-          get SETTLE_PROBE_MAX_ATTEMPTS() {
-            return SETTLE_PROBE_MAX_ATTEMPTS;
-          },
-          get SETTLE_PROBE_RETRY_DELAY() {
-            return SETTLE_PROBE_RETRY_DELAY;
-          },
-          get adoptLiveSessionFile() {
-            return adoptLiveSessionFile;
-          },
-          get cancelPrompt() {
-            return cancelPrompt;
-          },
-          get clearExtensionStatuses() {
-            return clearExtensionStatuses;
-          },
-          get closed() {
-            return closed;
-          },
-          get compactionNativeItemId() {
-            return compactionNativeItemId;
-          },
-          get completeOpenStreamItems() {
-            return completeOpenStreamItems;
-          },
-          get completeStreamItem() {
-            return completeStreamItem;
-          },
-          get completed() {
-            return completed;
-          },
-          get connection() {
-            return connection;
-          },
-          get content() {
-            return content;
-          },
-          get detail() {
-            return detail;
-          },
-          get emit() {
-            return emit;
-          },
-          get emitCompaction() {
-            return emitCompaction;
-          },
-          get emitExtensionError() {
-            return emitExtensionError;
-          },
-          get emitProviderRetry() {
-            return emitProviderRetry;
-          },
-          get emitSteerStatus() {
-            return emitSteerStatus;
-          },
-          get emitToolItem() {
-            return emitToolItem;
-          },
-          get events() {
-            return events;
-          },
-          get extensionStatusReset() {
-            return extensionStatusReset;
-          },
-          get failed() {
-            return failed;
-          },
-          get finalizeTurn() {
-            return finalizeTurn;
-          },
-          get handleExtensionUiRequest() {
-            return handleExtensionUiRequest;
-          },
-          get heldPrompts() {
-            return heldPrompts;
-          },
-          get id() {
-            return id;
-          },
-          get interrupted() {
-            return interrupted;
-          },
-          get itemOrdinal() {
-            return itemOrdinal;
-          },
-          get messageId() {
-            return messageId;
-          },
-          get method() {
-            return method;
-          },
-          get model() {
-            return model;
-          },
-          get nativeCompacting() {
-            return nativeCompacting;
-          },
-          get nativeItemId() {
-            return nativeItemId;
-          },
-          get nonNegativeInteger() {
-            return nonNegativeInteger;
-          },
-          get now() {
-            return now;
-          },
-          get outOfTurnExtensionErrors() {
-            return outOfTurnExtensionErrors;
-          },
-          get output() {
-            return output;
-          },
-          get pendingCompactResponses() {
-            return pendingCompactResponses;
-          },
-          get pendingPromptResponses() {
-            return pendingPromptResponses;
-          },
-          get pendingPromptResponsesDrained() {
-            return pendingPromptResponsesDrained;
-          },
-          get pendingPrompts() {
-            return pendingPrompts;
-          },
-          get pendingWake() {
-            return pendingWake;
-          },
-          get provider() {
-            return provider;
-          },
-          get providerThreadId() {
-            return providerThreadId;
-          },
-          get providerTurnId() {
-            return providerTurnId;
-          },
-          get queued() {
-            return queued;
-          },
-          get rejectedHeldCount() {
-            return rejectedHeldCount;
-          },
-          get releasedPromptTurnId() {
-            return releasedPromptTurnId;
-          },
-          get reportLiveUsage() {
-            return reportLiveUsage;
-          },
-          get request() {
-            return request;
-          },
-          get rollbackBarrier() {
-            return rollbackBarrier;
-          },
-          get scheduleSettleProbe() {
-            return scheduleSettleProbe;
-          },
-          get scheduleStreamFlush() {
-            return scheduleStreamFlush;
-          },
-          get scope() {
-            return scope;
-          },
-          get sessionEntity() {
-            return sessionEntity;
-          },
-          get sessionEventPermit() {
-            return sessionEventPermit;
-          },
-          get settleProbeGeneration() {
-            return settleProbeGeneration;
-          },
-          get start() {
-            return start;
-          },
-          get status() {
-            return status;
-          },
-          get stopPendingWake() {
-            return stopPendingWake;
-          },
-          get stopReason() {
-            return stopReason;
-          },
-          get stopRequested() {
-            return stopRequested;
-          },
-          get streamItemFor() {
-            return streamItemFor;
-          },
-          get streamItemId() {
-            return streamItemId;
-          },
-          get text() {
-            return text;
-          },
-          get threadId() {
-            return threadId;
-          },
-          get threadState() {
-            return threadState;
-          },
-          get unsolicitedActivityDetected() {
-            return unsolicitedActivityDetected;
-          },
-          get updateExtensionStatus() {
-            return updateExtensionStatus;
-          },
-          get updateProviderSession() {
-            return updateProviderSession;
+      const handleSessionEvent = Effect.fnUntraced(function* (event: PiRpcRecord) {
+        if (event["type"] === "t3.extension_status_reset") {
+          const reset = extensionStatusReset;
+          if (reset !== null && event["reset"] === reset) {
+            reset.previous = sessionEntity.extensionStatuses ?? [];
+            reset.touched.clear();
+            yield* clearExtensionStatuses();
+            yield* Deferred.succeed(reset.ready, undefined);
           }
-        });
+          return;
+        }
+        // A native wake may wait for a turn owner; status belongs to the live session immediately.
+        if (event["type"] === "extension_ui_request" && event["method"] === "setStatus") {
+          yield* updateExtensionStatus(event);
+          return;
+        }
+        // Model hooks can show dialogs before turn ownership; keep requests session-scoped and buffer output.
+        const interactiveUiRequest =
+          event["type"] === "extension_ui_request" &&
+          ["select", "confirm", "input", "editor"].includes(String(event["method"]));
+        if (
+          threadState?.activeTurn === null &&
+          pendingWake !== null &&
+          !interactiveUiRequest &&
+          !String(event["type"]).startsWith("t3.") &&
+          event["type"] !== "response"
+        ) {
+          pendingWake.events.push(event);
+          if (event["type"] === "agent_start") yield* updateProviderSession("running", null);
+          if (event["type"] === "agent_settled") yield* updateProviderSession("ready", null);
+          return;
+        }
+        const state = threadState;
+        const turn = state?.activeTurn ?? null;
+        switch (event["type"]) {
+          case "agent_start": {
+            if (
+              turn === null &&
+              state?.providerThread.appThreadId != null &&
+              continuationRequests !== undefined &&
+              !closed &&
+              !stopRequested
+            ) {
+              const wake: PiWake = { state, events: [event] };
+              pendingWake = wake;
+              if (rollbackBarrier !== null) {
+                yield* stopPendingWake(wake);
+                return;
+              }
+              yield* updateProviderSession("running", null);
+              yield* continuationRequests
+                .offer({
+                  threadId: state.providerThread.appThreadId,
+                  providerThreadId: state.providerThread.id,
+                  driver: PI_PROVIDER,
+                  detail: null,
+                  delivery: "adapter_buffered",
+                  dispatchIfCurrent: (dispatch) =>
+                    sessionEventPermit.withPermits(1)(
+                      Effect.suspend(() =>
+                        pendingWake === wake && threadState === state && !closed
+                          ? dispatch.pipe(
+                              Effect.asSome,
+                              Effect.tapError(() => stopPendingWake(wake)),
+                            )
+                          : Effect.succeedNone,
+                      ),
+                    ),
+                  clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
+                })
+                .pipe(Effect.tapError(() => stopPendingWake(wake)));
+              return;
+            }
+            if (turn === null) {
+              unsolicitedActivityDetected = true;
+              yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+              yield* connection.terminate;
+              return;
+            }
+            turn.sawAgentActivity = true;
+            turn.nativeAborted = false;
+            turn.settleProbeGeneration += 1;
+            return;
+          }
+          case "message_start": {
+            const role = recordString(event["message"], "role");
+            if (turn !== null && role === "assistant") {
+              turn.sawAgentActivity = true;
+              turn.messageOrdinal += 1;
+            }
+            const readSteer = role === "user" ? turn?.unreadSteers.shift() : undefined;
+            if (turn !== null && readSteer !== undefined) {
+              yield* emitSteerStatus(turn, readSteer, "completed");
+            }
+            return;
+          }
+          case "message_update": {
+            if (turn === null) return;
+            turn.sawAgentActivity = true;
+            // Pi sends auto_retry_end only after the message ends; streamed output is recovery.
+            if (turn.activeProviderRetry !== null) {
+              const recoveredAt = yield* DateTime.now;
+              yield* emitProviderRetry(turn, turn.activeProviderRetry, "completed", recoveredAt);
+              turn.activeProviderRetry = null;
+            }
+            yield* reportLiveUsage(turn, event["usage"]);
+            const delta = event["assistantMessageEvent"];
+            const deltaType = recordString(delta, "type");
+            const contentIndex = recordNumber(delta, "contentIndex") ?? 0;
+            if (deltaType === "text_start" || deltaType === "thinking_start") {
+              // A provider that reconnects mid-block starts it again; its earlier text is abandoned.
+              const restarted = turn.streamItems.get(streamItemId(turn, contentIndex));
+              if (restarted !== undefined && !restarted.completed) restarted.text = "";
+              return;
+            }
+            if (deltaType === "text_delta" || deltaType === "thinking_delta") {
+              const item = yield* streamItemFor(
+                turn,
+                deltaType === "text_delta" ? "assistant_message" : "reasoning",
+                contentIndex,
+              );
+              item.text += recordString(delta, "delta") ?? "";
+              yield* scheduleStreamFlush(turn, item);
+              return;
+            }
+            if (deltaType === "text_end" || deltaType === "thinking_end") {
+              const item = yield* streamItemFor(
+                turn,
+                deltaType === "text_end" ? "assistant_message" : "reasoning",
+                contentIndex,
+              );
+              yield* completeStreamItem(
+                turn,
+                item,
+                recordString(delta, "content") ?? recordString(delta, "thinking"),
+              );
+              return;
+            }
+            return;
+          }
+          case "message_end": {
+            if (turn === null) return;
+            const message = event["message"];
+            if (recordString(message, "role") !== "assistant") return;
+            yield* completeOpenStreamItems(turn);
+            const reportedProvider = recordString(message, "provider");
+            const reportedModelId = recordString(message, "model");
+            if (reportedProvider && reportedModelId) {
+              turn.reportedModel = `${reportedProvider}/${reportedModelId}`;
+            }
+            if (recordString(message, "stopReason") === "error" && turn.failure === null) {
+              turn.failure = makeProviderFailure({
+                message: recordString(message, "errorMessage") ?? "Pi reported a model error.",
+                class: "provider_error",
+              });
+            }
+            return;
+          }
+          case "tool_execution_start":
+            if (turn !== null) {
+              turn.sawAgentActivity = true;
+              yield* emitToolItem(turn, event, "start");
+            }
+            return;
+          case "tool_execution_update":
+            if (turn !== null) yield* emitToolItem(turn, event, "update");
+            return;
+          case "tool_execution_end":
+            if (turn !== null) yield* emitToolItem(turn, event, "end");
+            return;
+          case "compaction_start": {
+            if (turn === null) return;
+            turn.settleProbeGeneration += 1;
+            if (turn.activeCompaction !== null) {
+              yield* emitCompaction(turn, turn.activeCompaction, "cancelled");
+            }
+            const startedAt = yield* DateTime.now;
+            const compaction = {
+              nativeItemId: compactionNativeItemId(turn),
+              startedAt,
+            } satisfies PiCompactionState;
+            turn.activeCompaction = compaction;
+            yield* emitCompaction(turn, compaction, "running");
+            return;
+          }
+          case "compaction_end": {
+            if (turn === null) return;
+            const observedAt = yield* DateTime.now;
+            const compaction = turn.activeCompaction ?? {
+              nativeItemId: compactionNativeItemId(turn),
+              startedAt: observedAt,
+            };
+            turn.activeCompaction = null;
+            turn.compactionCancelled = event["aborted"] === true;
+            const result = event["result"];
+            if (result === null || result === undefined) {
+              if (event["aborted"] === true) {
+                yield* emitCompaction(turn, compaction, "cancelled");
+                if (
+                  (turn.settleWhenIdle || !turn.sawAgentActivity) &&
+                  releasedPromptTurnId !== turn.providerTurn.id
+                ) {
+                  yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+                }
+                return;
+              }
+              const errorMessage =
+                recordString(event, "errorMessage") ?? "Pi context compaction failed.";
+              yield* emitCompaction(turn, compaction, "failed", {
+                summary: errorMessage.slice(0, 1_000),
+              });
+              if (
+                (turn.settleWhenIdle || !turn.sawAgentActivity) &&
+                releasedPromptTurnId !== turn.providerTurn.id
+              ) {
+                yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+              }
+              return;
+            }
+            // Clear overflow failures only when compaction will retry; ordinary compaction must retain exhausted retries.
+            if (event["willRetry"] === true) turn.failure = null;
+            turn.latestCompactionAfterTokens =
+              nonNegativeInteger(result, "estimatedTokensAfter") ?? null;
+            const summary = recordString(result, "summary");
+            const beforeTokenCount = nonNegativeInteger(result, "tokensBefore");
+            const afterTokenCount = nonNegativeInteger(result, "estimatedTokensAfter");
+            yield* emitCompaction(turn, compaction, "completed", {
+              ...(summary === undefined ? {} : { summary }),
+              ...(beforeTokenCount === undefined ? {} : { beforeTokenCount }),
+              ...(afterTokenCount === undefined ? {} : { afterTokenCount }),
+            });
+            if (
+              (turn.settleWhenIdle || !turn.sawAgentActivity) &&
+              releasedPromptTurnId !== turn.providerTurn.id
+            ) {
+              yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+            }
+            return;
+          }
+          case "auto_retry_start": {
+            if (turn === null) return;
+            const emittedAt = yield* DateTime.now;
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
+            const maxAttempts = Math.max(
+              attempt,
+              Math.trunc(recordNumber(event, "maxAttempts") ?? attempt),
+            );
+            const retryDelayMs = Math.max(0, Math.trunc(recordNumber(event, "delayMs") ?? 0));
+            const failure = makeProviderFailure({
+              message: recordString(event, "errorMessage") ?? "Pi provider request failed.",
+              class: "provider_error",
+              retryable: true,
+            });
+            const current = turn.activeProviderRetry;
+            const providerRetry = {
+              retry: { attempt, maxAttempts, retryDelayMs },
+              failure,
+              startedAt: current?.startedAt ?? emittedAt,
+              itemOrdinal:
+                current?.itemOrdinal ??
+                itemOrdinal(turn, `terminal-failure:${turn.providerTurn.id}`),
+            } satisfies PiProviderRetryState;
+            turn.activeProviderRetry = providerRetry;
+            yield* emitProviderRetry(turn, providerRetry, "running", emittedAt);
+            return;
+          }
+          case "auto_retry_end": {
+            if (turn === null) return;
+            const emittedAt = yield* DateTime.now;
+            if (event["success"] === true) {
+              // Successful retries supersede the failure agent_settled would reuse.
+              if (turn.activeProviderRetry !== null) {
+                const attempt = Math.max(
+                  1,
+                  Math.trunc(
+                    recordNumber(event, "attempt") ?? turn.activeProviderRetry.retry.attempt,
+                  ),
+                );
+                const recoveredRetry = {
+                  ...turn.activeProviderRetry,
+                  retry: { ...turn.activeProviderRetry.retry, attempt },
+                };
+                yield* emitProviderRetry(turn, recoveredRetry, "completed", emittedAt);
+                turn.activeProviderRetry = null;
+              }
+              turn.failure = null;
+              return;
+            }
+            const failure = makeProviderFailure({
+              message: recordString(event, "finalError") ?? "Pi auto-retry failed.",
+              class: "provider_error",
+              retryable: false,
+            });
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
+            const current = turn.activeProviderRetry;
+            const providerRetry = {
+              retry: {
+                attempt,
+                maxAttempts: current?.retry.maxAttempts ?? attempt,
+                retryDelayMs: current?.retry.retryDelayMs ?? null,
+              },
+              failure,
+              startedAt: current?.startedAt ?? emittedAt,
+              itemOrdinal:
+                current?.itemOrdinal ??
+                itemOrdinal(turn, `terminal-failure:${turn.providerTurn.id}`),
+            } satisfies PiProviderRetryState;
+            turn.activeProviderRetry = providerRetry;
+            turn.failure = failure;
+            yield* emitProviderRetry(turn, providerRetry, "failed", emittedAt);
+            return;
+          }
+          case "extension_ui_request":
+            yield* handleExtensionUiRequest(event);
+            return;
+          case "extension_error": {
+            yield* emitExtensionError(event);
+            return;
+          }
+          case "agent_settled": {
+            if (turn?.interrupted === true) {
+              if (state === null) return;
+              const liveState = yield* request({ type: "get_state" }, 2_000).pipe(
+                Effect.orElseSucceed(() => undefined),
+              );
+              adoptLiveSessionFile(state, liveState);
+              yield* finalizeTurn(state);
+              return;
+            }
+            if (turn !== null) {
+              turn.nativeAborted = event["aborted"] === true;
+              turn.settleWhenIdle = true;
+              turn.settleProbeGeneration += 1;
+              if (
+                turn.adoptedWake &&
+                pendingPromptResponses.some(
+                  (pending) =>
+                    pending.providerTurnId === turn.providerTurn.id &&
+                    pending.kind === "turn_start",
+                )
+              )
+                return;
+              yield* scheduleSettleProbe(turn, true);
+            }
+            return;
+          }
+          case "response": {
+            const command = recordString(event, "command");
+            if (command === "compact") {
+              const pendingCompact = pendingCompactResponses.shift();
+              const compactTurn =
+                pendingCompact?.providerTurnId === turn?.providerTurn.id ? turn : null;
+              if (compactTurn !== null) compactTurn.manualCompactInFlight = false;
+              if (event["success"] === true) {
+                if (
+                  compactTurn !== null &&
+                  (compactTurn.settleWhenIdle ||
+                    (compactTurn.promptMayBeCommandOnly && !compactTurn.sawAgentActivity))
+                ) {
+                  yield* scheduleSettleProbe(compactTurn, compactTurn.settleWhenIdle);
+                }
+                return;
+              }
+              if (event["success"] !== false) return;
+              if (compactTurn === null) return;
+              if (compactTurn.activeCompaction !== null) return;
+              if (pendingCompact?.kind === "steer") {
+                yield* Effect.logWarning("Pi rejected a compact steer.", {
+                  errorLength: recordString(event, "error")?.length,
+                });
+                if (
+                  compactTurn.settleWhenIdle ||
+                  (compactTurn.promptMayBeCommandOnly && !compactTurn.sawAgentActivity)
+                ) {
+                  yield* scheduleSettleProbe(compactTurn, compactTurn.settleWhenIdle);
+                }
+                return;
+              }
+              if (!compactTurn.compactionCancelled) {
+                compactTurn.failure = makeProviderFailure({
+                  message: recordString(event, "error") ?? "Pi compact failed.",
+                  class: "provider_error",
+                });
+                if (state !== null) yield* finalizeTurn(state);
+                return;
+              }
+              if (!compactTurn.sawAgentActivity) {
+                yield* scheduleSettleProbe(compactTurn);
+              }
+              return;
+            }
+            const responseId = recordString(event, "id");
+            const promptIndex =
+              command !== "prompt"
+                ? -1
+                : responseId === undefined
+                  ? 0
+                  : pendingPromptResponses.findIndex((pending) => pending.id === responseId);
+            const pendingPrompt =
+              promptIndex < 0 ? undefined : pendingPromptResponses.splice(promptIndex, 1)[0];
+            if (
+              pendingPrompt !== undefined &&
+              pendingPromptResponses.length === 0 &&
+              pendingPromptResponsesDrained !== null
+            ) {
+              yield* Deferred.succeed(pendingPromptResponsesDrained, undefined);
+              pendingPromptResponsesDrained = null;
+            }
+            const responseTurn =
+              pendingPrompt?.providerTurnId === turn?.providerTurn.id ? turn : null;
+            if (
+              event["success"] === false &&
+              nativeCompacting &&
+              recordString(event, "error")?.startsWith(PI_COMPACTING_PROMPT_REJECTION) === true &&
+              pendingPrompt !== undefined &&
+              responseTurn !== null
+            ) {
+              heldPrompts.splice(rejectedHeldCount++, 0, pendingPrompt);
+              return;
+            }
+            if (
+              event["success"] === true &&
+              pendingPrompt?.kind === "turn_start" &&
+              responseTurn !== null &&
+              recordString(event["data"], "disposition") === "handled"
+            ) {
+              responseTurn.promptMayBeCommandOnly = true;
+            }
+            const consumedInputIsIdleCandidate =
+              responseTurn !== null &&
+              (responseTurn.settleWhenIdle ||
+                (responseTurn.promptMayBeCommandOnly && !responseTurn.sawAgentActivity)) &&
+              !pendingPromptResponses.some(
+                (pending) => pending.providerTurnId === responseTurn.providerTurn.id,
+              );
+            if (event["success"] === true) {
+              if (
+                pendingPrompt?.messageId !== undefined &&
+                responseTurn !== null &&
+                recordString(recordField(event, "data"), "disposition") === "queued"
+              ) {
+                responseTurn.unreadSteers.push(pendingPrompt.messageId);
+                yield* emitSteerStatus(responseTurn, pendingPrompt.messageId, "pending");
+              }
+              // Consumed input may emit no agent_settled; probe idle behind preceding native events.
+              if (
+                responseTurn !== null &&
+                (consumedInputIsIdleCandidate ||
+                  (pendingPrompt?.kind === "turn_start" &&
+                    responseTurn.adoptedWake &&
+                    (responseTurn.settleWhenIdle || responseTurn.promptMayBeCommandOnly)))
+              ) {
+                yield* scheduleSettleProbe(
+                  responseTurn,
+                  responseTurn.adoptedWake || responseTurn.settleWhenIdle,
+                );
+              }
+              return;
+            }
+            if (event["success"] !== false) return;
+            if (command === "steer" || pendingPrompt?.kind === "steer") {
+              // A rejected steer refuses only that message; its target turn keeps running.
+              yield* Effect.logWarning("Pi rejected a steer message.", {
+                errorLength: recordString(event, "error")?.length,
+              });
+              if (consumedInputIsIdleCandidate && responseTurn !== null)
+                yield* scheduleSettleProbe(responseTurn, responseTurn.settleWhenIdle);
+              return;
+            }
+            const failedTurn =
+              command === "prompt" && pendingPrompt?.kind === "turn_start"
+                ? responseTurn
+                : command === "parse"
+                  ? turn
+                  : null;
+            if (failedTurn !== null) {
+              const failure = makeProviderFailure({
+                message: recordString(event, "error") ?? "Pi rejected the prompt.",
+                class: "provider_error",
+              });
+              if (failedTurn.adoptedWake && command === "prompt") {
+                failedTurn.rejectedPromptFailure = failure;
+                failedTurn.settleWhenIdle = true;
+                yield* scheduleSettleProbe(failedTurn, true);
+              } else {
+                failedTurn.failure = failure;
+                if (state !== null) yield* finalizeTurn(state);
+              }
+            }
+            return;
+          }
+          case "t3.ui_request_expired": {
+            const requestId = recordString(event, "requestId");
+            if (requestId === undefined) return;
+            const pending = pendingPrompts.get(requestId);
+            if (pending === undefined || pending !== event["pending"]) return;
+            pendingPrompts.delete(requestId);
+            yield* cancelPrompt(pending, yield* DateTime.now);
+            return;
+          }
+          case "t3.flush_extension_errors": {
+            for (const extensionError of outOfTurnExtensionErrors.splice(0)) {
+              yield* emitExtensionError(extensionError);
+            }
+            return;
+          }
+          case "t3.rollback_barrier": {
+            if (rollbackBarrier !== null && event["barrier"] === rollbackBarrier)
+              yield* Deferred.succeed(rollbackBarrier, undefined);
+            return;
+          }
+          case "t3.settle_probe": {
+            const data = event["data"];
+            const probeFailed = event["probeFailed"] === true;
+            const settleAfterAgentActivity = event["settleAfterAgentActivity"] === true;
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
+            if (
+              turn === null ||
+              turn.providerTurn.id !== event["providerTurnId"] ||
+              turn.settleProbeGeneration !== event["settleProbeGeneration"] ||
+              (!settleAfterAgentActivity && turn.sawAgentActivity) ||
+              turn.activeCompaction !== null
+            ) {
+              return;
+            }
+            if (
+              turn.manualCompactInFlight ||
+              pendingCompactResponses.some(
+                (pending) => pending.providerTurnId === turn.providerTurn.id,
+              ) ||
+              pendingPromptResponses.some(
+                (pending) => pending.providerTurnId === turn.providerTurn.id,
+              )
+            ) {
+              turn.settleWhenIdle = true;
+              return;
+            }
+            if (probeFailed) {
+              if (!settleAfterAgentActivity) {
+                if (state !== null) yield* finalizeTurn(state);
+                return;
+              }
+              if (attempt < SETTLE_PROBE_MAX_ATTEMPTS) {
+                yield* Effect.sleep(SETTLE_PROBE_RETRY_DELAY).pipe(
+                  Effect.andThen(scheduleSettleProbe(turn, true, attempt + 1)),
+                  Effect.forkIn(scope),
+                );
+                return;
+              }
+              stopRequested = true;
+              yield* connection.terminate;
+              return;
+            }
+            if (
+              recordField(data, "isStreaming") !== true &&
+              recordField(data, "isCompacting") !== true &&
+              (recordNumber(data, "pendingMessageCount") ?? 0) === 0
+            ) {
+              turn.settleWhenIdle = false;
+              if (state === null) return;
+              adoptLiveSessionFile(state, data);
+              yield* finalizeTurn(state);
+            }
+            return;
+          }
+          default:
+            return;
+        }
+      });
 
       yield* Effect.gen(function* () {
         while (true) {
@@ -2753,86 +3314,97 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           ),
       );
 
-      const applySelection = bindApplySelection({
-          get PI_INHERIT_MODEL_SLUG() {
-            return PI_INHERIT_MODEL_SLUG;
-          },
-          get PI_PROVIDER() {
-            return PI_PROVIDER;
-          },
-          get PI_THINKING_LEVELS() {
-            return PI_THINKING_LEVELS;
-          },
-          get appliedModel() {
-            return appliedModel;
-          },
-          get appliedThinking() {
-            return appliedThinking;
-          },
-          get baselineModel() {
-            return baselineModel;
-          },
-          get baselineThinking() {
-            return baselineThinking;
-          },
-          get contextWindow() {
-            return contextWindow;
-          },
-          get discoverModels() {
-            return discoverModels;
-          },
-          get discoveredModels() {
-            return discoveredModels;
-          },
-          get emit() {
-            return emit;
-          },
-          get event() {
-            return event;
-          },
-          get id() {
-            return id;
-          },
-          get message() {
-            return message;
-          },
-          get model() {
-            return model;
-          },
-          get modelId() {
-            return modelId;
-          },
-          get models() {
-            return models;
-          },
-          get now() {
-            return now;
-          },
-          get protocolError() {
-            return protocolError;
-          },
-          get provider() {
-            return provider;
-          },
-          get rememberModelContextWindow() {
-            return rememberModelContextWindow;
-          },
-          get request() {
-            return request;
-          },
-          get serviceTierMayBeSet() {
-            return serviceTierMayBeSet;
-          },
-          get sessionEntity() {
-            return sessionEntity;
-          },
-          get to() {
-            return to;
-          },
-          get updated() {
-            return updated;
+      const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
+        const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        // pi.setModel and /preset can change the model without an RPC event.
+        // Confirm cached selections against Pi before skipping them.
+        const modelCached =
+          modelSelection.model !== PI_INHERIT_MODEL_SLUG && modelSelection.model === appliedModel;
+        let modelDrifted = false;
+        if (modelCached || (thinking !== undefined && thinking === appliedThinking)) {
+          const state = yield* request({ type: "get_state" });
+          const stateModel = recordField(state, "model");
+          const piModel = `${recordString(stateModel, "provider")}/${recordString(stateModel, "id")}`;
+          modelDrifted = modelCached && piModel !== appliedModel;
+          appliedThinking = recordString(state, "thinkingLevel") ?? null;
+        }
+        if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
+          if (appliedModel !== null && baselineModel !== null) {
+            const restoredModel = yield* request({ type: "set_model", ...baselineModel });
+            appliedThinking = null;
+            contextWindow = rememberModelContextWindow(restoredModel);
+            appliedModel = null;
+            const updatedAt = yield* DateTime.now;
+            sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
+            yield* emit({
+              type: "provider_session.updated",
+              driver: PI_PROVIDER,
+              providerSession: sessionEntity,
+            });
           }
-        });
+          if (
+            thinking === undefined &&
+            baselineThinking !== null &&
+            appliedThinking !== baselineThinking
+          ) {
+            yield* request({ type: "set_thinking_level", level: baselineThinking });
+            appliedThinking = baselineThinking;
+          }
+        } else if (modelDrifted || modelSelection.model !== appliedModel) {
+          // Extensions and models.json edits can add providers after the first discovery.
+          if (findReportedPiModel(modelSelection.model, discoveredModels) === undefined) {
+            yield* discoverModels();
+          }
+          const parsed = resolvePiModelSlug(modelSelection.model, discoveredModels);
+          if (parsed === null) {
+            return yield* protocolError(
+              `Pi model '${modelSelection.model}' must use provider/model format`,
+            );
+          }
+          const selectedModel = yield* request({
+            type: "set_model",
+            provider: parsed.provider,
+            modelId: parsed.modelId,
+          });
+          // Pi resets thinking to the target model's configured default on set_model.
+          appliedThinking = null;
+          contextWindow = rememberModelContextWindow(selectedModel);
+          appliedModel = modelSelection.model;
+          const updatedAt = yield* DateTime.now;
+          sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
+          yield* emit({
+            type: "provider_session.updated",
+            driver: PI_PROVIDER,
+            providerSession: sessionEntity,
+          });
+        }
+        if (
+          thinking !== undefined &&
+          thinking !== appliedThinking &&
+          PI_THINKING_LEVELS.has(thinking)
+        ) {
+          yield* request({ type: "set_thinking_level", level: thinking });
+          appliedThinking = thinking;
+        }
+        const requestedTier = getModelSelectionStringOptionValue(modelSelection, "serviceTier");
+        const serviceTier =
+          requestedTier === undefined || requestedTier === PI_STANDARD_SERVICE_TIER
+            ? null
+            : requestedTier;
+        if (serviceTier !== null || serviceTierMayBeSet) {
+          serviceTierMayBeSet = true;
+          const result = yield* request({
+            type: "prompt",
+            message: `/${PI_T3_SERVICE_TIER_COMMAND} ${serviceTier ?? ""}`.trimEnd(),
+          });
+          // Pi before 0.99 acknowledges a handled extension command without a disposition.
+          const disposition = recordString(result, "disposition");
+          if (disposition !== undefined && disposition !== "handled") {
+            return yield* protocolError("T3 Code's Pi extension did not apply the service tier");
+          }
+          serviceTierMayBeSet = serviceTier !== null;
+        }
+      });
 
       const resolvePromptPayload = Effect.fnUntraced(function* (
         text: string,
