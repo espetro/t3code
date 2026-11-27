@@ -141,6 +141,88 @@ function applySchemaStubs(): void {
   }
 }
 
+function vmRssKb(pid: number): number {
+  try {
+    const status = NodeFS.readFileSync(`/proc/${String(pid)}/status`, "utf8");
+    const match = /^VmRSS:\s+(\d+)\s+kB/m.exec(status);
+    return match === undefined ? 0 : Number(match[1]);
+  } catch {
+    return 0;
+  }
+}
+
+function childPidsOf(parent: number): ReadonlyArray<number> {
+  const children: Array<number> = [];
+  for (const ent of NodeFS.readdirSync("/proc")) {
+    if (!/^\d+$/.test(ent)) continue;
+    try {
+      const status = NodeFS.readFileSync(`/proc/${ent}/status`, "utf8");
+      const match = /^PPid:\s+(\d+)/m.exec(status);
+      if (match !== null && Number(match[1]) === parent) children.push(Number(ent));
+    } catch {
+      // Process exited while listing.
+    }
+  }
+  return children;
+}
+
+function descendantCheckerPids(scriptcPid: number): ReadonlyArray<number> {
+  const pending = [scriptcPid];
+  const seen = new Set<number>([scriptcPid]);
+  const checkers: Array<number> = [];
+  while (pending.length > 0) {
+    const pid = pending.pop()!;
+    for (const child of childPidsOf(pid)) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      pending.push(child);
+      try {
+        const comm = NodeFS.readFileSync(`/proc/${String(child)}/comm`, "utf8").trim();
+        if (comm === "tsc" || comm === "tsc-ts") checkers.push(child);
+      } catch {
+        // Process exited while listing.
+      }
+    }
+  }
+  return checkers;
+}
+
+function cgroupRemainingKb(): number {
+  try {
+    const rel = NodeFS.readFileSync("/proc/self/cgroup", "utf8").trim().split(":").at(-1) ?? "";
+    const dir = NodePath.join("/sys/fs/cgroup", rel);
+    const current = Number(NodeFS.readFileSync(NodePath.join(dir, "memory.current"), "utf8"));
+    const max = Number(NodeFS.readFileSync(NodePath.join(dir, "memory.max"), "utf8"));
+    if (!Number.isFinite(current) || !Number.isFinite(max)) return Number.POSITIVE_INFINITY;
+    return Math.max(0, (max - current) / 1024);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function releaseCheckersIfHostIsStarving(scriptcPid: number): NodeJS.Timeout {
+  let released = false;
+  return setInterval(() => {
+    if (released) return;
+    const rss = vmRssKb(scriptcPid);
+    const remaining = cgroupRemainingKb();
+    const checkers = descendantCheckerPids(scriptcPid);
+    if (checkers.length === 0) return;
+    if (rss < 2.5 * 1024 * 1024 && remaining > 3 * 1024 * 1024) return;
+    released = true;
+    process.stderr.write(
+      `scriptc pid=${String(scriptcPid)} rssKb=${String(rss)} remainingKb=${String(remaining)} SIGKILL checker pids=${checkers.join(",")}\n`,
+    );
+    for (const pid of checkers) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  }, 2_000);
+}
+
 if (!NodeFS.existsSync(overlayPath)) {
   throw new Error(`Missing scriptc tsconfig overlay: ${overlayPath}`);
 }
@@ -235,7 +317,7 @@ async function main(): Promise<number> {
           SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo",
           SCRIPTC_CHECKER_SERVER: "0",
           GOMAXPROCS: process.env.GOMAXPROCS ?? "1",
-          GOMEMLIMIT: process.env.GOMEMLIMIT ?? "5GiB",
+          GOMEMLIMIT: process.env.GOMEMLIMIT ?? "2500MiB",
           GOGC: process.env.GOGC ?? "50",
           SCRIPTC_CHECK_STREAM_MODE: process.env.SCRIPTC_CHECK_STREAM_MODE ?? "1",
           SCRIPTC_INCR_LOWERING: process.env.SCRIPTC_INCR_LOWERING ?? "1",
@@ -243,6 +325,8 @@ async function main(): Promise<number> {
       },
     );
     process.stderr.write(`scriptc pid=${String(child.pid ?? "none")} overlay-driver\n`);
+    const ticker =
+      child.pid === undefined ? undefined : releaseCheckersIfHostIsStarving(child.pid);
     const result = await new Promise<{
       status: number | null;
       signal: NodeJS.Signals | null;
@@ -255,6 +339,7 @@ async function main(): Promise<number> {
         resolve({ status, signal, error: undefined });
       });
     });
+    if (ticker !== undefined) clearInterval(ticker);
     process.stderr.write(
       `scriptc status=${String(result.status)} signal=${String(result.signal)} error=${
         result.error === undefined ? "none" : result.error.message

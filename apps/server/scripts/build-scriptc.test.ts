@@ -17,7 +17,9 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain("**/*.test.ts");
   expect(script).toContain('include: ["binScriptc.ts"]');
   expect(script).toContain('SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo"');
-  expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "5GiB"');
+  expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "2500MiB"');
+  expect(script).toContain("descendantCheckerPids");
+  expect(script).toContain("SIGKILL checker pids");
   expect(script).toContain("#t3/built-in-drivers");
   expect(script).toContain("builtInDrivers.native.ts");
   expect(script).toContain("#t3/source-control-definitions");
