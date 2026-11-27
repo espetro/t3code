@@ -62,7 +62,11 @@ const resolveCursorSdkWorkerFile = Effect.fn("resolveCursorSdkWorkerFile")(funct
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const execDir = path.dirname(yield* HostProcess.ExecutablePath);
-  for (const name of ["cursor-sdk-worker.mjs", "cursor-sdk-worker.js"] as const) {
+  for (const name of [
+    "cursor-sdk-worker.mjs",
+    "cursor-sdk-worker.js",
+    "cursor-sdk-worker.ts",
+  ] as const) {
     const candidate = path.join(execDir, name);
     if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
   }

@@ -18,6 +18,7 @@ export function playwrightSidecarDriverCandidates(input: {
   return [
     input.join(input.execDir, "playwright-sidecar.mjs"),
     input.join(input.execDir, "playwright-sidecar.js"),
+    input.join(input.execDir, "playwright-sidecar.ts"),
     input.join(input.moduleDir, input.source ? "playwrightSidecar.ts" : "playwrightSidecar.mjs"),
   ];
 }

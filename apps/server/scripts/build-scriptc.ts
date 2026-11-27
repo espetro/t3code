@@ -16,6 +16,16 @@ const overlayPath = NodePath.join(serverDir, "tsconfig.scriptc.json");
 const nearestTsconfig = NodePath.join(srcDir, "tsconfig.json");
 const entry = NodePath.join(srcDir, "binScriptc.ts");
 const out = NodePath.join(serverDir, "dist", "t3");
+const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
+  {
+    from: NodePath.join(srcDir, "preview", "playwrightSidecar.ts"),
+    to: NodePath.join(serverDir, "dist", "playwright-sidecar.ts"),
+  },
+  {
+    from: NodePath.join(srcDir, "provider", "cursorSdkWorker.ts"),
+    to: NodePath.join(serverDir, "dist", "cursor-sdk-worker.ts"),
+  },
+];
 
 if (!NodeFS.existsSync(overlayPath)) {
   throw new Error(`Missing scriptc tsconfig overlay: ${overlayPath}`);
@@ -42,13 +52,16 @@ try {
     },
   );
   if (result.error && "code" in result.error && result.error.code === "ENOENT") {
-    console.error(
-      "scriptc is not installed. Install scriptc 0.4.17 and rerun:\n  scriptc build src/binScriptc.ts --npm-static=effect -o dist/t3",
+    process.stderr.write(
+      "scriptc is not installed. Install scriptc 0.4.17 and rerun:\n  scriptc build src/binScriptc.ts --npm-static=effect -o dist/t3\n",
     );
     process.exit(1);
   }
   if (result.status !== 0) {
     process.exit(result.status === null ? 1 : result.status);
+  }
+  for (const sidecar of sidecarCopies) {
+    NodeFS.copyFileSync(sidecar.from, sidecar.to);
   }
 } finally {
   try {

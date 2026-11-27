@@ -112,6 +112,7 @@ describe("ServerBrowserContexts", () => {
     ).toEqual([
       "/packaged/playwright-sidecar.mjs",
       "/packaged/playwright-sidecar.js",
+      "/packaged/playwright-sidecar.ts",
       "/repo/apps/server/src/preview/playwrightSidecar.ts",
     ]);
   });
