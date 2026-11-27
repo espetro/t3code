@@ -15,7 +15,7 @@ const repoRoot = NodePath.resolve(serverDir, "../..");
 const overlayPath = NodePath.join(serverDir, "tsconfig.scriptc.json");
 const nearestTsconfig = NodePath.join(srcDir, "tsconfig.json");
 const stubDir = NodePath.join(srcDir, "scriptc-stubs");
-const entryFile = process.env.SCRIPTC_ENTRY ?? "binScriptc.ts";
+const entryFile = "binScriptc.ts";
 const entry = NodePath.join(srcDir, entryFile);
 const out = NodePath.join(serverDir, "dist", "t3");
 const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
@@ -371,6 +371,11 @@ async function main(): Promise<number> {
         restoreBarrel(spec);
       } catch {
         // parts remain
+      }
+      try {
+        NodeFS.unlinkSync(NodePath.join(stubDir, spec.stubFile));
+      } catch {
+        // overlay-only
       }
     }
   }

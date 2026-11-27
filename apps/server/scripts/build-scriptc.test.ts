@@ -16,6 +16,9 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain('extends: "../tsconfig.json"');
   expect(script).toContain("**/*.test.ts");
   expect(script).toContain("include: [entryFile]");
+  expect(script).toContain('const entryFile = "binScriptc.ts"');
+  expect(script).not.toContain("SCRIPTC_ENTRY");
+  expect(script).toContain("unlinkSync(NodePath.join(stubDir, spec.stubFile))");
   expect(script).toContain('SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo"');
   expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "2500MiB"');
   expect(script).toContain("descendantCheckerPids");
