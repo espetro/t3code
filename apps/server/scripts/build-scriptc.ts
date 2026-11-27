@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * From apps/server: scriptc build src/binScriptc.ts --npm-static=effect -o dist/t3
- * Compiles TypeScript source, not vp pack output. Links tsconfig.scriptc.json
- * (noImplicitOverride: false) as src/tsconfig.json so scriptc sees that overlay.
+ * Compiles TypeScript source, not vp pack output. Writes src/tsconfig.json so
+ * scriptc sees noImplicitOverride: false without a symlink (a link to
+ * tsconfig.scriptc.json makes extends "./tsconfig.json" resolve to itself).
  */
 // @effect-diagnostics nodeBuiltinImport:off -- Host-side scriptc driver.
 import * as NodeChildProcess from "node:child_process";
@@ -35,13 +36,28 @@ if (!NodeFS.existsSync(entry)) {
 }
 if (NodeFS.existsSync(nearestTsconfig)) {
   throw new Error(
-    `Refusing to replace existing ${nearestTsconfig}; scriptc needs it as a link to the overlay.`,
+    `Refusing to replace existing ${nearestTsconfig}; scriptc needs it as a written overlay.`,
   );
 }
 
 NodeFS.mkdirSync(NodePath.dirname(out), { recursive: true });
-NodeFS.symlinkSync(NodePath.relative(srcDir, overlayPath), nearestTsconfig);
+NodeFS.writeFileSync(
+  nearestTsconfig,
+  `${JSON.stringify(
+    {
+      extends: "../tsconfig.json",
+      compilerOptions: {
+        noImplicitOverride: false,
+        strict: true,
+        strictNullChecks: true,
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
 
+let exitCode = 0;
 try {
   const result = NodeChildProcess.spawnSync(
     "scriptc",
@@ -55,18 +71,19 @@ try {
     process.stderr.write(
       "scriptc is not installed. Install scriptc 0.4.17 and rerun:\n  scriptc build src/binScriptc.ts --npm-static=effect -o dist/t3\n",
     );
-    process.exit(1);
-  }
-  if (result.status !== 0) {
-    process.exit(result.status === null ? 1 : result.status);
-  }
-  for (const sidecar of sidecarCopies) {
-    NodeFS.copyFileSync(sidecar.from, sidecar.to);
+    exitCode = 1;
+  } else if (result.status !== 0) {
+    exitCode = result.status === null ? 1 : result.status;
+  } else {
+    for (const sidecar of sidecarCopies) {
+      NodeFS.copyFileSync(sidecar.from, sidecar.to);
+    }
   }
 } finally {
   try {
     NodeFS.unlinkSync(nearestTsconfig);
   } catch {
-    // The overlay link is only for this process.
+    // The overlay file is only for this process.
   }
 }
+if (exitCode !== 0) process.exit(exitCode);
