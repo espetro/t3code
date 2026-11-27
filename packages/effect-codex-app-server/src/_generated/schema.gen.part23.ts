@@ -1,3 +1,4 @@
+/* oxlint-disable eslint(no-unused-vars) -- scriptc#4381 part imports */
 import * as Schema from "effect/Schema";
 import {
   V2SkillsExtraRootsSetParams__AbsolutePathBuf,

@@ -59,7 +59,7 @@ export const splitGeneratedSchemaFile = (filePath: string) => {
       if (hit.length === 0) continue;
       importChunks.push(`import {\n  ${hit.join(",\n  ")},\n} from "./${prev.name}";\n`);
     }
-    let body = group;
+    let body = "/* oxlint-disable eslint(no-unused-vars) -- scriptc#4381 part imports */\n" + group;
     if (importChunks.length > 0) {
       if (body.startsWith("import ")) {
         const newline = body.indexOf("\n");
