@@ -15,8 +15,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import * as HostProcess from "./HostProcess.ts";
-
 export class ManagedPolicyFileError extends Schema.TaggedError<ManagedPolicyFileError>()(
   "ManagedPolicyFileError",
   {
@@ -163,8 +161,8 @@ export interface RegistryKey {
 }
 
 /**
- * Reads the registry through the Win32 API in this process. A missing key and a failed read come
- * back apart, and blocked registry tools such as reg.exe do not matter.
+ * Reads HKLM through `reg.exe` (64-bit view). A missing key and a failed read come
+ * back apart. `_loadFfi` is ignored; callers used to pass an ffi-rs loader.
  */
 export class WindowsRegistry extends Context.Service<
   WindowsRegistry,
@@ -176,159 +174,102 @@ export class WindowsRegistry extends Context.Service<
   }
 >()("@t3tools/shared/managedPolicyFile/WindowsRegistry") {}
 
-// (HKEY)(LONG)0x80000002, sign-extended to 64 bits.
-const HKEY_LOCAL_MACHINE = -0x7ffffffen;
-const KEY_READ = 0x20019;
-const KEY_WOW64_64KEY = 0x100;
-const REG_SZ = 1;
-const REG_DWORD = 4;
-const ERROR_FILE_NOT_FOUND = 2;
-const ERROR_MORE_DATA = 234;
-const ERROR_NO_MORE_ITEMS = 259;
-// Value and key names are at most 16,383 characters.
-const MAX_NAME_CHARS = 16_384;
+const REG_EXE = "C:\\Windows\\System32\\reg.exe";
+const POWERSHELL_EXE = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+const REG_KEY_NOT_FOUND = /unable to find the specified registry key/i;
 
-class Win32Failure extends Schema.TaggedError<Win32Failure>()("Win32Failure", {
-  code: Schema.Number,
-}) {
-  override get message(): string {
-    return `Windows error ${this.code}`;
+const registryQuery = Effect.fnUntraced(
+  function* (command: string, args: ReadonlyArray<string>) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const handle = yield* spawner.spawn(ChildProcess.make(command, args, { stdin: "ignore" }));
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
+        handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+        handle.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+    return { stdout, stderr, exitCode: Number(exitCode) };
+  },
+  Effect.scoped,
+  Effect.timeout(Duration.seconds(10)),
+);
+
+/** `reg query` lines: four spaces, name, four spaces, type, four spaces, data. */
+const REG_VALUE_LINE = /^ {4}(.+?) {4}(REG_[A-Z_]+) {4}(.*)$/;
+
+export function parseRegQueryOutput(subkey: string, stdout: string): RegistryKey {
+  const root = `HKEY_LOCAL_MACHINE\\${subkey}`.toLowerCase();
+  const values: Array<RegistryValue> = [];
+  const subkeys: Array<string> = [];
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.length === 0) continue;
+    if (/^HKEY_/i.test(line)) {
+      const path = line.trim();
+      const lower = path.toLowerCase();
+      if (lower === root) continue;
+      const prefix = `${root}\\`;
+      if (lower.startsWith(prefix)) {
+        const name = path.slice(prefix.length);
+        if (name.length > 0 && !name.includes("\\")) subkeys.push(name);
+      }
+      continue;
+    }
+    const match = REG_VALUE_LINE.exec(line);
+    const name = match?.[1];
+    const type = match?.[2];
+    const data = match?.[3];
+    if (name === undefined || type === undefined || data === undefined) continue;
+    if (type === "REG_SZ") {
+      values.push({ name, type: "REG_SZ", data });
+    } else if (type === "REG_DWORD") {
+      const parsed =
+        data.startsWith("0x") || data.startsWith("0X") ? Number.parseInt(data, 16) : Number(data);
+      values.push(
+        Number.isFinite(parsed)
+          ? { name, type: "REG_DWORD", data: parsed }
+          : { name, type: "other" },
+      );
+    } else {
+      values.push({ name, type: "other" });
+    }
   }
+  return { values, subkeys };
 }
 
-const isWin32Failure = Schema.is(Win32Failure);
-
-/**
- * Each app passes how it loads ffi-rs: a server single-executable resolves packages on disk only
- * through `require`, and the desktop's CommonJS bundle loads them with `import()`.
- */
-export const layerWindowsRegistry = (loadFfi: () => Promise<typeof import("ffi-rs")>) =>
+export const layerWindowsRegistry = (_loadFfi?: () => Promise<unknown>) =>
   Layer.effect(
     WindowsRegistry,
     Effect.gen(function* () {
-      const architecture = yield* HostProcess.Architecture;
-      const loadApi = yield* Effect.cached(
-        Effect.tryPromise({
-          try: async () => {
-            // HKEY_LOCAL_MACHINE, key handles, and the null pointers below are 64-bit.
-            if (architecture !== "x64" && architecture !== "arm64") {
-              throw new Error(`no registry access on ${architecture}`);
-            }
-            const { DataType, load, open } = await loadFfi();
-            open({ library: "t3-advapi32", path: "advapi32.dll" });
-            const call = (
-              funcName: string,
-              paramsType: Array<(typeof DataType)[keyof typeof DataType]>,
-              paramsValue: Array<unknown>,
-            ): number =>
-              load({
-                library: "t3-advapi32",
-                funcName,
-                retType: DataType.I32,
-                paramsType,
-                paramsValue,
-              } as Parameters<typeof load>[0]) as number;
-            const { BigInt: Handle, U32, U8Array: Out, WString } = DataType;
-            return {
-              open: (subkey: string, handle: Buffer) =>
-                call(
-                  "RegOpenKeyExW",
-                  [Handle, WString, U32, U32, Out],
-                  [HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ | KEY_WOW64_64KEY, handle],
-                ),
-              enumValue: (
-                key: bigint,
-                index: number,
-                name: Buffer,
-                nameChars: Buffer,
-                type: Buffer,
-                data: Buffer,
-                dataBytes: Buffer,
-              ) =>
-                call(
-                  "RegEnumValueW",
-                  [Handle, U32, Out, Out, Handle, Out, Out, Out],
-                  [key, index, name, nameChars, 0n, type, data, dataBytes],
-                ),
-              enumKey: (key: bigint, index: number, name: Buffer, nameChars: Buffer) =>
-                call(
-                  "RegEnumKeyExW",
-                  [Handle, U32, Out, Out, Handle, Handle, Handle, Handle],
-                  [key, index, name, nameChars, 0n, 0n, 0n, 0n],
-                ),
-              close: (key: bigint) => call("RegCloseKey", [Handle], [key]),
-            };
-          },
-          catch: (cause) => new WindowsRegistryError({ cause }),
-        }),
-      );
-
-      const readKey = (api: Effect.Success<typeof loadApi>, subkey: string) => {
-        const handle = Buffer.alloc(8);
-        const opened = api.open(subkey, handle);
-        if (opened === ERROR_FILE_NOT_FOUND) return undefined;
-        if (opened !== 0) throw new Win32Failure({ code: opened });
-        const key = handle.readBigInt64LE();
-        try {
-          const name = Buffer.alloc(MAX_NAME_CHARS * 2);
-          const chars = Buffer.alloc(4);
-          const values: Array<RegistryValue> = [];
-          for (let index = 0; ; index++) {
-            let data = Buffer.alloc(64 * 1024);
-            const type = Buffer.alloc(4);
-            const bytes = Buffer.alloc(4);
-            const attempt = () => {
-              chars.writeUInt32LE(MAX_NAME_CHARS);
-              bytes.writeUInt32LE(data.length);
-              return api.enumValue(key, index, name, chars, type, data, bytes);
-            };
-            let code = attempt();
-            // The value is larger than the buffer; the API reported the size it needs.
-            if (code === ERROR_MORE_DATA) {
-              data = Buffer.alloc(bytes.readUInt32LE());
-              code = attempt();
-            }
-            if (code === ERROR_NO_MORE_ITEMS) break;
-            if (code !== 0) throw new Win32Failure({ code: code });
-            const valueName = name.subarray(0, chars.readUInt32LE() * 2).toString("utf16le");
-            const stored = data.subarray(0, bytes.readUInt32LE());
-            const valueType = type.readUInt32LE();
-            values.push(
-              valueType === REG_SZ
-                ? {
-                    name: valueName,
-                    type: "REG_SZ",
-                    data: stored.toString("utf16le").replace(/\0+$/, ""),
-                  }
-                : valueType === REG_DWORD && stored.length === 4
-                  ? { name: valueName, type: "REG_DWORD", data: stored.readUInt32LE() }
-                  : { name: valueName, type: "other" },
-            );
-          }
-          const subkeys: Array<string> = [];
-          for (let index = 0; ; index++) {
-            chars.writeUInt32LE(MAX_NAME_CHARS);
-            const code = api.enumKey(key, index, name, chars);
-            if (code === ERROR_NO_MORE_ITEMS) break;
-            if (code !== 0) throw new Win32Failure({ code: code });
-            subkeys.push(name.subarray(0, chars.readUInt32LE() * 2).toString("utf16le"));
-          }
-          return { values, subkeys };
-        } finally {
-          api.close(key);
-        }
-      };
-
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       return WindowsRegistry.of({
         readMachineKey: Effect.fn("WindowsRegistry.readMachineKey")(function* (subkey) {
-          const api = yield* loadApi;
-          return yield* Effect.try({
-            try: () => readKey(api, subkey),
-            catch: (cause) =>
-              new WindowsRegistryError(
-                isWin32Failure(cause) ? { code: cause.code, cause } : { cause },
-              ),
-          });
+          const queried = yield* registryQuery(REG_EXE, [
+            "query",
+            `HKLM\\${subkey}`,
+            "/reg:64",
+          ]).pipe(
+            Effect.catch(() =>
+              registryQuery(POWERSHELL_EXE, [
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                `reg.exe query 'HKLM\\${subkey.replaceAll("'", "''")}' /reg:64`,
+              ]),
+            ),
+            Effect.mapError((cause) => new WindowsRegistryError({ cause })),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+          const output = `${queried.stdout}\n${queried.stderr}`;
+          if (queried.exitCode !== 0) {
+            if (REG_KEY_NOT_FOUND.test(output)) return undefined;
+            return yield* new WindowsRegistryError({
+              cause: new Error(output.trim() || `reg.exe exited ${queried.exitCode}`),
+            });
+          }
+          return parseRegQueryOutput(subkey, queried.stdout);
         }),
       });
     }),

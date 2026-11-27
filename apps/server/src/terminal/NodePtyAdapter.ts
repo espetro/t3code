@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
+import * as HelperPtyAdapter from "./HelperPtyAdapter.ts";
 
 export class NodePtyModuleLoadError extends Schema.TaggedError<NodePtyModuleLoadError>()(
   "NodePtyModuleLoadError",
@@ -35,11 +36,12 @@ class NodePtyCancelError extends Schema.TaggedError<NodePtyCancelError>()("NodeP
 
 type NodePtyModuleLoader = () => Promise<typeof import("node-pty")>;
 
-// node-pty's native addon stays external; single-executables need require to resolve disk modules and spawn helpers.
+// node-pty's native addon stays external; constructed so a native compile does not pull the .node.
 const requireForNodePty = NodeModule.createRequire(import.meta.url);
+const nodePtyId = ["node", "pty"].join("-");
 
 const loadNodePty: NodePtyModuleLoader = () =>
-  Promise.resolve().then(() => requireForNodePty("node-pty") as typeof import("node-pty"));
+  Promise.resolve().then(() => requireForNodePty(nodePtyId) as typeof import("node-pty"));
 
 export const NodePtyModuleLoaderRef = Context.Reference<NodePtyModuleLoader>(
   "server/terminal/NodePtyModuleLoader",
@@ -54,7 +56,7 @@ const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
 
-  const packageJsonPath = requireForNodePty.resolve("node-pty/package.json");
+  const packageJsonPath = requireForNodePty.resolve(`${nodePtyId}/package.json`);
   const packageDir = path.dirname(packageJsonPath);
   const candidates = [
     path.join(packageDir, "build", "Release", "spawn-helper"),
@@ -292,4 +294,10 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
   });
 });
 
-export const layer = Layer.effect(PtyAdapter.PtyAdapter, make());
+const nodePtyLayer = Layer.effect(PtyAdapter.PtyAdapter, make());
+
+export const layer = Layer.unwrap(
+  Effect.gen(function* () {
+    return (yield* HostProcess.IsExecutable) ? HelperPtyAdapter.layer : nodePtyLayer;
+  }),
+);

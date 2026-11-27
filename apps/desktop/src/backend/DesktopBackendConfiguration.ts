@@ -175,6 +175,52 @@ function resourceMonitorBinaryName(platform: NodeJS.Platform): string {
   return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
 }
 
+function scriptcBackendFileName(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "t3.exe" : "t3";
+}
+
+/**
+ * Native server binary next to a desktop install, then next to bin.mjs.
+ * Packaged: `resources/t3`, `resources/server/t3`. Dev/unpacked: beside `apps/server/dist/bin.mjs`.
+ */
+export function scriptcBackendCandidates(input: {
+  readonly platform: NodeJS.Platform;
+  readonly resourcesPath: string;
+  readonly serverRoot: string;
+  readonly backendEntryPath: string;
+  readonly join: (...parts: ReadonlyArray<string>) => string;
+  readonly dirname: (filePath: string) => string;
+}): ReadonlyArray<string> {
+  const name = scriptcBackendFileName(input.platform);
+  return [
+    input.join(input.resourcesPath, name),
+    input.join(input.resourcesPath, "server", name),
+    input.join(input.dirname(input.backendEntryPath), name),
+    input.join(input.serverRoot, name),
+  ];
+}
+
+const resolveScriptcBackendPath = Effect.fn("desktop.backendConfiguration.resolveScriptcBackend")(
+  function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const candidates = scriptcBackendCandidates({
+      platform: environment.platform,
+      resourcesPath: environment.resourcesPath,
+      serverRoot: environment.serverRoot,
+      backendEntryPath: environment.backendEntryPath,
+      join: environment.path.join,
+      dirname: environment.path.dirname,
+    });
+    for (const candidate of candidates) {
+      if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+        return Option.some(candidate);
+      }
+    }
+    return Option.none<string>();
+  },
+);
+
 const resolveResourceMonitorPath = Effect.fn(
   "desktop.backendConfiguration.resolveResourceMonitorPath",
 )(function* () {
@@ -535,11 +581,14 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
     never,
-    DesktopEnvironment.DesktopEnvironment | DesktopServerExposure.DesktopServerExposure
+    | DesktopEnvironment.DesktopEnvironment
+    | DesktopServerExposure.DesktopServerExposure
+    | FileSystem.FileSystem
   > {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const scriptcPath = yield* resolveScriptcBackendPath();
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -563,6 +612,27 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
+
+    if (Option.isSome(scriptcPath)) {
+      return {
+        executablePath: scriptcPath.value,
+        args: ["--bootstrap-fd", "3"],
+        entryPath: scriptcPath.value,
+        cwd: environment.backendCwd,
+        env: {
+          ...backendChildEnvPatch(),
+          T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+          T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
+          [DESKTOP_HOST_SCOPE_ENV]: input.hostScope,
+        },
+        extendEnv: true,
+        bootstrap,
+        bootstrapDelivery: "fd3",
+        httpBaseUrl: backendExposure.httpBaseUrl,
+        captureOutput: true,
+        preflightFailure: Option.none(),
+      } satisfies DesktopBackendManager.DesktopBackendStartConfig;
+    }
 
     return {
       executablePath: process.execPath,
@@ -883,6 +953,7 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
   });
 

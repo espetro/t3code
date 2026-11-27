@@ -279,6 +279,66 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  it.effect("resolvePrimary prefers a scriptc binary next to the install", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      const resourcesPath = path.join(baseDir, "resources");
+      const scriptcPath = path.join(resourcesPath, "t3");
+      yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
+      yield* fileSystem.writeFileString(scriptcPath, "scriptc");
+      yield* fileSystem.chmod(scriptcPath, 0o755);
+
+      const config = yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        return yield* configuration.resolvePrimary;
+      }).pipe(
+        Effect.provide(
+          layerBackendConfiguration().pipe(
+            Layer.provideMerge(layerServerExposure),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(
+              layerEnvironment(baseDir, {
+                appPath: `${resourcesPath}/app.asar`,
+                platform: "linux",
+                resourcesPath,
+              }),
+            ),
+          ),
+        ),
+      );
+
+      assert.equal(config.executablePath, scriptcPath);
+      assert.deepEqual(config.args, ["--bootstrap-fd", "3"]);
+      assert.equal(config.entryPath, scriptcPath);
+      assert.isUndefined(config.env.ELECTRON_RUN_AS_NODE);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it("lists scriptc lookup paths beside the packaged install and bin.mjs", () => {
+    assert.deepEqual(
+      DesktopBackendConfiguration.scriptcBackendCandidates({
+        platform: "darwin",
+        resourcesPath: "/App/Contents/Resources",
+        serverRoot: "/App/Contents/Resources/server.asar",
+        backendEntryPath: "/App/Contents/Resources/server.asar/apps/server/dist/bin.mjs",
+        join: (...parts) => parts.join("/"),
+        dirname: (filePath) => filePath.slice(0, filePath.lastIndexOf("/")),
+      }),
+      [
+        "/App/Contents/Resources/t3",
+        "/App/Contents/Resources/server/t3",
+        "/App/Contents/Resources/server.asar/apps/server/dist/t3",
+        "/App/Contents/Resources/server.asar/t3",
+      ],
+    );
+  });
+
   it.effect("resolvePrimary starts from server.asar without materializing the WSL tree", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
