@@ -3,6 +3,7 @@
 // Split out of CodexAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original value.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import { pipe } from "effect/Function";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
@@ -196,7 +197,7 @@ export const bindCaptureMcpAppItem = (ctx: any) => {
       serverConfig,
       settledTurns,
       takePendingMcpAppCapture,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
     const __fn = (
       context: ActiveCodexTurnContext,
       nativeTurnId: string,

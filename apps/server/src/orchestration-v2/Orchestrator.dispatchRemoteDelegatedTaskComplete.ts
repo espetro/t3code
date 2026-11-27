@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -252,7 +253,7 @@ export const bindDispatchRemoteDelegatedTaskComplete = (ctx: any) =>
       mapDispatchError,
       planDelegatedCompletionDelivery,
       projectionStore,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     // Delivery planning reads only this task and the undelivered tasks of the queued delivery;
     // the task's own node and turn item are all it updates besides.

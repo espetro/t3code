@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -249,7 +250,7 @@ export const bindRecordSubagentFollowup = (ctx: any) =>
       projectionStore,
       providerAdapters,
       providerTurnForRun,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     if (!mayStartSubagentFollowup(command)) return;
     const pending = yield* Ref.get(events);

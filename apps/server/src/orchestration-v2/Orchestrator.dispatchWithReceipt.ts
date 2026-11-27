@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -248,7 +249,7 @@ export const bindDispatchWithReceipt = (ctx: any) =>
       metadataUpdateContinuation,
       threadDispatch,
       withSubagentParentLock,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     // The latest stable run is the one with a checkpoint. Wait for a just-completed run's capture,
     // outside the locks its commit takes, so a fork right after a turn starts from that turn.

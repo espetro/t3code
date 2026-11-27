@@ -3,6 +3,7 @@
 // Split out of CodexAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import { pipe } from "effect/Function";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
@@ -215,7 +216,7 @@ export const bindEmitOrDeferRootTerminal = (ctx: any) =>
       scope,
       status,
       turnTerminalizationPermit,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     const event = yield* makeRootTerminalEvent(input);
     const hasActiveDescendants = Array.from((yield* Ref.get(activeTurns)).values()).some(

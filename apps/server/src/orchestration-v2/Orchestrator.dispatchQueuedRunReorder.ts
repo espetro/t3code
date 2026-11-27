@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -240,7 +241,7 @@ export const bindDispatchQueuedRunReorder = (ctx: any) =>
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.reorder" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    const { OrchestratorDispatchError, emit, loadProjectionForCommand } = ctx;
+    const { OrchestratorDispatchError, emit, loadProjectionForCommand } = pickScriptcBindCtx(ctx);
 
     const projection = yield* loadProjectionForCommand(command, ["runs", "messages"], {
       messageRoles: ["user"],

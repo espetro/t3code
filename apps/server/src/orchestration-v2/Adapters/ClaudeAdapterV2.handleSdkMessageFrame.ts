@@ -3,6 +3,7 @@
 // Split out of ClaudeAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import {
   compactDynamicToolOutput,
@@ -419,7 +420,7 @@ export const bindHandleSdkMessageFrame = (ctx: any) =>
       updateClaudeSubagentNode,
       wakeBuffers,
       withoutForgedMcpApp,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     const liveQuery = yield* Ref.get(queryContext);
     if (liveQuery?.query !== input.query) {

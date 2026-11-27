@@ -3,6 +3,7 @@
 // Split out of ClaudeAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original value.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import {
   compactDynamicToolOutput,
@@ -463,7 +464,7 @@ import {
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindBuildToolCallArtifacts = (ctx: any) => {
   return ((...args: any[]) => {
-    const { idAllocator, input } = ctx;
+    const { idAllocator, input } = pickScriptcBindCtx(ctx);
     const __fn = (input: {
       readonly context: ActiveClaudeTurnContext | null;
       readonly nativeItemId: string;

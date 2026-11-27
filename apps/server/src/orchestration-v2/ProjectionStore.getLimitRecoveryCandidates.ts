@@ -3,6 +3,7 @@
 // Split out of ProjectionStore.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -153,7 +154,7 @@ export const bindGetLimitRecoveryCandidates = (ctx: any) =>
         decodeTurnItemPayload,
         sql,
         booleanInt,
-      } = ctx;
+      } = pickScriptcBindCtx(ctx);
 
       const rows = yield* sql<{
         readonly payload_json: string;

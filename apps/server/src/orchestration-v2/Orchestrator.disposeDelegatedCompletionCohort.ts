@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -251,7 +252,7 @@ export const bindDisposeDelegatedCompletionCohort = (ctx: any) =>
     // open, and its delivery stays the wake's, so the wake's terminal reserves any sibling's result.
     readonly interruptedWakeTaskIds?: ReadonlyArray<NodeId>;
   }) {
-    const { completionDeliveryRun, emit, emitQueuedRunCancellation } = ctx;
+    const { completionDeliveryRun, emit, emitQueuedRunCancellation } = pickScriptcBindCtx(ctx);
 
     const parentRun = input.projection.runs.find((candidate) => candidate.id === input.parentRunId);
     if (parentRun === undefined) {

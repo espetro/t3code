@@ -3,6 +3,7 @@
 // Split out of GitVcsDriverCore.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "../orchestration-v2/scriptcBindScope.ts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -92,7 +93,7 @@ export const bindReadBranchChangeTotals = (ctx: any) =>
       readEmptyTreeHash,
       resolveReviewMergeBase,
       untrackedTotalsFailures,
-    } = ctx;
+    } = pickScriptcBindCtx(ctx);
 
     const resolved = yield* resolveReviewMergeBase(cwd, branch);
     // A rename after `git status` read HEAD moves the base config away, so the base was guessed.

@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -252,7 +253,7 @@ export const bindCancelIdleOrphans = (ctx: any) =>
         isOrchestratorProjectionError,
         projectionStore,
         writeAppOwnedTask,
-      } = ctx;
+      } = pickScriptcBindCtx(ctx);
 
       const { command, events, projection } = input;
       const pending = yield* Ref.get(events);

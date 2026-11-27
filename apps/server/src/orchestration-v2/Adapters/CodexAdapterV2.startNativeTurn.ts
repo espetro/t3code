@@ -3,6 +3,7 @@
 // Split out of CodexAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import { pipe } from "effect/Function";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
@@ -205,7 +206,7 @@ export const bindStartNativeTurn = (ctx: any) =>
         settledTurns,
         startedAt,
         withAppServerDeadline,
-      } = ctx;
+      } = pickScriptcBindCtx(ctx);
 
       const threadId = yield* getNativeThreadId(turnInput.providerThread);
       // A thread can reach its first turn without ensureThread or resumeThread, like a fork.

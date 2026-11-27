@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -249,7 +250,7 @@ export const bindStopRunForQueuedCommand = (ctx: any) =>
     readonly reason: string;
     readonly now: DateTime.Utc;
   }) {
-    const { dispatchRunInterrupt, emit } = ctx;
+    const { dispatchRunInterrupt, emit } = pickScriptcBindCtx(ctx);
 
     const { command, events, effects, projection, now, targetRunId } = input;
     const others = queuedRunsInDeliveryOrder(projection).filter(

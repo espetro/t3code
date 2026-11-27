@@ -3,6 +3,7 @@
 // Split out of Orchestrator.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original Effect.fn.
+import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -240,7 +241,7 @@ export const bindDispatchThreadCreate = (ctx: any) =>
     command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    const { OrchestratorThreadAlreadyExistsError, emit, findThread, idAllocator } = ctx;
+    const { OrchestratorThreadAlreadyExistsError, emit, findThread, idAllocator } = pickScriptcBindCtx(ctx);
 
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,

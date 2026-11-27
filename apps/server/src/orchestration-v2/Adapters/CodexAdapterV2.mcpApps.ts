@@ -3,6 +3,7 @@
 // Split out of CodexAdapterV2.ts so scriptc tsc-ts can compile the native server
 // (scriptc#4381 per-file memcpy). Behavior is unchanged; the factory passes
 // its scope as `ctx` and this module returns the original value.
+import { pickScriptcBindCtx } from "../scriptcBindScope.ts";
 import { pipe } from "effect/Function";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
@@ -177,7 +178,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { buildWorkspaceInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindMcpApps = (ctx: any) => {
-  const { client, ensureInitialized, getNativeThreadId, mcpAppsError, withLoadedThread } = ctx;
+  const { client, ensureInitialized, getNativeThreadId, mcpAppsError, withLoadedThread } = pickScriptcBindCtx(ctx);
   return {
     listTools: Effect.fn("CodexAdapterV2.listTools")(
       function* (toolsInput) {
