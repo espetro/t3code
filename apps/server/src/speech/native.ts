@@ -1,7 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - native inference and IPC cleanup need killable Promise boundaries outside the Effect runtime.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeSea from "node:sea";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { SpeechStreamText } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
+import * as Effect from "effect/Effect";
 import { createSpeechAudio } from "./audio.ts";
 
 // Inline the small child entry so the packaged CLI does not need a separate worker artifact.
@@ -245,8 +248,12 @@ export async function runNativeSpeechWorker(mode: "discover" | "model", moduleUr
   await run(import.meta.url, moduleUrl);
 }
 
-function speechWorkerArgs(mode: "discover" | "model", moduleUrl?: string) {
-  if (NodeSea.isSea()) return ["__speech-worker", mode, ...(moduleUrl ? [moduleUrl] : [])];
+export function speechWorkerArgs(
+  isExecutable: boolean,
+  mode: "discover" | "model",
+  moduleUrl?: string,
+) {
+  if (isExecutable) return ["__speech-worker", mode, ...(moduleUrl ? [moduleUrl] : [])];
   // Normal Node and Electron hosts can evaluate the same entry without a sibling artifact.
   const loader = `const baseUrl = ${JSON.stringify(import.meta.url)};
     const moduleUrl = process.argv[1];${loaderEntry}`;
@@ -258,11 +265,54 @@ function speechWorkerArgs(mode: "discover" | "model", moduleUrl?: string) {
   ];
 }
 
-export async function listNativeSpeechGpuDevices(moduleUrl?: string) {
-  const child = NodeChildProcess.spawn(process.execPath, speechWorkerArgs("discover", moduleUrl), {
-    stdio: ["ignore", "ignore", "inherit", "ipc"],
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+export function speechWorkerLaunch(input: {
+  readonly isExecutable: boolean;
+  readonly execPath: string;
+  readonly nodePath: string;
+  readonly mode: "discover" | "model";
+  readonly moduleUrl?: string;
+}): { readonly command: string; readonly args: readonly string[] } {
+  // Packaged hosts are not Node, so koffi loads in a system-Node child via the inlined worker.
+  return {
+    command: input.isExecutable ? input.nodePath : input.execPath,
+    args: speechWorkerArgs(false, input.mode, input.moduleUrl),
+  };
+}
+
+async function spawnSpeechWorker(
+  mode: "discover" | "model",
+  options: {
+    readonly moduleUrl?: string;
+    readonly serialization?: "advanced";
+    readonly env?: NodeJS.ProcessEnv;
+  } = {},
+) {
+  const isExecutable = Effect.runSync(HostProcess.IsExecutable);
+  const nodePath = isExecutable
+    ? await Effect.runPromise(
+        resolveNodeExecutable("Speech").pipe(Effect.provide(NodeServices.layer)),
+      )
+    : process.execPath;
+  const { command, args } = speechWorkerLaunch({
+    isExecutable,
+    execPath: process.execPath,
+    nodePath,
+    mode,
+    moduleUrl: options.moduleUrl,
   });
+  return NodeChildProcess.spawn(command, [...args], {
+    stdio: ["ignore", "ignore", "inherit", "ipc"],
+    serialization: options.serialization,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      ...options.env,
+    },
+  });
+}
+
+export async function listNativeSpeechGpuDevices(moduleUrl?: string) {
+  const child = await spawnSpeechWorker("discover", { moduleUrl });
   return await new Promise<{ id: string; name: string }[]>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
@@ -320,15 +370,9 @@ async function loadNativeSpeechModelOnce(
   acceleration = "auto",
 ) {
   signal.throwIfAborted();
-  const child = NodeChildProcess.spawn(process.execPath, speechWorkerArgs("model"), {
-    stdio: ["ignore", "ignore", "inherit", "ipc"],
+  const child = await spawnSpeechWorker("model", {
     serialization: "advanced",
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      // Backend registration can initialize drivers even when model placement is CPU.
-      ...(acceleration === "cpu" ? { TRANSCRIBE_BACKENDS: "cpu" } : {}),
-    },
+    env: acceleration === "cpu" ? { TRANSCRIBE_BACKENDS: "cpu" } : undefined,
   });
   let stopped = false;
   let pending: ReturnType<typeof Promise.withResolvers<Reply>> | undefined;

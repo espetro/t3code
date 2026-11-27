@@ -1,5 +1,3 @@
-import { enableCliCompileCache } from "./cliCompileCache.ts";
-
 // Packaged builds load this graph with require(esm): top-level await anywhere in it breaks them.
 // ACP agents spawn `acp-mcp-bridge` per session and `acp-mcp-call` per tool call, so those fast
 // paths dispatch before the full CLI module graph (seconds of evaluation) loads.
@@ -37,7 +35,6 @@ export async function runCliCommand() {
     ]);
     await runCursorSdkWorker(NodeServices.layer);
   } else {
-    enableCliCompileCache();
     // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.
     const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
     attachConsoleStdin();

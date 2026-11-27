@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as NodeDns from "node:dns";
 import * as NodeOS from "node:os";
-import * as NodeSea from "node:sea";
 
 export const Platform = Context.Reference<NodeJS.Platform>("@t3tools/shared/HostProcess/Platform", {
   defaultValue: () => process.platform,
@@ -93,8 +92,14 @@ export const InvokedAs = Context.Reference<string>("@t3tools/shared/HostProcess/
   defaultValue: () => process.argv0,
 });
 
+let executable = false;
+
+export const markExecutable = (): void => {
+  executable = true;
+};
+
 export const IsExecutable = Context.Reference<boolean>("@t3tools/shared/HostProcess/IsExecutable", {
-  defaultValue: () => NodeSea.isSea(),
+  defaultValue: () => executable,
 });
 
 export class HostnameLookupError extends Schema.TaggedError<HostnameLookupError>()(
