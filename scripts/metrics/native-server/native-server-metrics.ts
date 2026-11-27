@@ -44,6 +44,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import * as Socket from "effect/socket/Socket";
 
+import { emitPackedClient } from "../../../apps/server/scripts/packClient.ts";
 import { run } from "../../scenarios/shell.ts";
 import { describeFailure, round } from "../core/report.ts";
 import {
@@ -63,6 +64,11 @@ import {
   type CaseSample,
   type Measured,
 } from "./report.ts";
+import {
+  NATIVE_SERVER_BENCH_NOW,
+  nativeServerBenchThreadJson,
+  nativeServerBenchTurnItemJson,
+} from "./seed.ts";
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 const DEFAULT_RUNS = 15;
@@ -269,41 +275,46 @@ const seedReplayEvents = Effect.fn("nativeServer.seedReplay")(function* (
   count: number,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const now = "2026-01-01T00:00:00.000Z";
+  const now = NATIVE_SERVER_BENCH_NOW;
+  const threadJson = nativeServerBenchThreadJson(threadId);
   yield* sql.withTransaction(
-    Effect.forEach(
-      Array.from({ length: count }, (_, index) => index),
-      (index) => {
-        const payload = JSON.stringify({
-          id: `item:bench-replay:${index}`,
-          type: "command_execution",
-          threadId,
-          runId: null,
-          nodeId: null,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: index + 1,
-          title: "ok",
-          status: "completed",
-          input: "ok",
-          startedAt: now,
-          completedAt: now,
-          updatedAt: now,
-        });
-        return sql`
-          INSERT INTO orchestration_events (
-            event_id, aggregate_kind, stream_id, stream_version, event_type,
-            occurred_at, actor_kind, payload_json, metadata_json, application_event_version
-          ) VALUES (
-            ${`event:bench-replay:${index}`}, 'thread', ${threadId}, ${index + 1},
-            'turn-item.updated', ${now}, 'provider', ${payload}, '{}', 2
-          )
-        `;
-      },
-      { discard: true },
-    ),
+    Effect.gen(function* () {
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads (
+          thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+          created_at, updated_at, payload_json
+        ) VALUES (
+          ${threadId}, 'project:native-server-bench', 'native-server-bench', 'codex',
+          'full-access', 'default', ${now}, ${now}, ${threadJson}
+        )
+      `;
+      yield* Effect.forEach(
+        Array.from({ length: count }, (_, index) => index),
+        (index) => {
+          const payload = nativeServerBenchTurnItemJson(threadId, index);
+          return Effect.gen(function* () {
+            yield* sql`
+              INSERT INTO orchestration_events (
+                event_id, aggregate_kind, stream_id, stream_version, event_type,
+                occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+              ) VALUES (
+                ${`event:bench-replay:${index}`}, 'thread', ${threadId}, ${index + 1},
+                'turn-item.updated', ${now}, 'provider', ${payload}, '{}', 2
+              )
+            `;
+            yield* sql`
+              INSERT INTO orchestration_v2_projection_turn_items (
+                turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json
+              ) VALUES (
+                ${`item:bench-replay:${index}`}, ${threadId}, NULL, ${index + 1},
+                'command_execution', 'completed', ${now}, ${payload}
+              )
+            `;
+          });
+        },
+        { discard: true },
+      );
+    }),
   );
 });
 
@@ -424,6 +435,11 @@ const runOnce = Effect.fn("nativeServer.runOnce")(function* (options: {
   const directory = yield* fs.makeTempDirectoryScoped();
   const baseDir = path.join(directory, "t3");
   yield* fs.makeDirectory(path.join(baseDir, "userdata"), { recursive: true });
+  const distDir = NodePath.dirname(options.bin);
+  emitPackedClient({
+    distDir,
+    webDist: NodePath.resolve(distDir, "../../web/dist"),
+  });
   const port = yield* freePort;
   const stopWatching = yield* watchMachine;
   const server = yield* spawnServer({
