@@ -31,7 +31,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
+import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "#t3/built-in-drivers";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type {

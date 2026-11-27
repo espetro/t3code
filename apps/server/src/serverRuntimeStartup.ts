@@ -42,7 +42,7 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import { VcsAutomaticFetchInterval } from "./vcs/VcsAutomaticFetchInterval.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";

@@ -24,7 +24,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProjectService from "./ProjectService.ts";
 
 export class ScratchUnavailableError extends Schema.TaggedError<ScratchUnavailableError>()(

@@ -32,7 +32,7 @@ import {
   parseGitCloneProgressLine,
   type GitCloneProgressLine,
 } from "../project/gitCloneProgress.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";

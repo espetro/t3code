@@ -41,7 +41,7 @@ import * as MilestoneEvents from "../milestones/MilestoneEvents.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import * as PullRequestWatchService from "../pullRequest/PullRequestWatchService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";

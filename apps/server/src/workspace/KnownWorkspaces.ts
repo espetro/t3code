@@ -12,7 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 
 export class UnknownWorkspaceError extends Schema.TaggedError<UnknownWorkspaceError>()(

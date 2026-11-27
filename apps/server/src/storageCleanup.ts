@@ -43,7 +43,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
-import * as GitManager from "./git/GitManager.ts";
+import * as GitManager from "#t3/git-manager";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import { scratchFolderRoot } from "./project/ManagedProjectFolders.ts";
@@ -59,7 +59,7 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as CheckpointCaptureIndex from "./vcs/checkpointCaptureIndex.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";

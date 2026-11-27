@@ -16,8 +16,18 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain('extends: "../tsconfig.json"');
   expect(script).toContain("**/*.test.ts");
   expect(script).toContain('include: ["binScriptc.ts"]');
-  expect(script).toContain('SCRIPTC_CHECKER: "tsgo"');
+  expect(script).toContain('SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo"');
   expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "5GiB"');
+  expect(script).toContain("#t3/built-in-drivers");
+  expect(script).toContain("builtInDrivers.native.ts");
+  expect(script).toContain("#t3/source-control-definitions");
+  expect(script).toContain("sourceControlDefinitions.native.ts");
+  expect(script).toContain("GitManager.native.ts");
+  expect(script).toContain("GitVcsDriver.native.ts");
+  expect(script).toContain("scriptc-stubs/OpenCodeRuntime.ts");
+  expect(script).toContain("scriptc-native-schema-stub");
+  expect(script).toContain("effect-codex-app-server/schema");
+  expect(script).toContain("effect-acp/schema-v1");
   expect(script).not.toContain("symlinkSync");
 });
 

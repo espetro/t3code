@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 
 import * as OrchestratorV2 from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 
 export const refreshPushedPullRequests = Effect.fn("refreshPushedPullRequests")(
   function* (

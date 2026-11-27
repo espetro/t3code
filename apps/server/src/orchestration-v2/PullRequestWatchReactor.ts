@@ -41,7 +41,7 @@ import {
   type ProviderChangeRequestWatchFingerprint,
   PullRequestProviderError,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";

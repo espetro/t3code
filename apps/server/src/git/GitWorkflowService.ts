@@ -30,8 +30,8 @@ import {
 } from "@t3tools/contracts";
 
 import { trimAsciiWhitespace } from "@t3tools/contracts";
-import * as GitManager from "./GitManager.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitManager from "#t3/git-manager";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 

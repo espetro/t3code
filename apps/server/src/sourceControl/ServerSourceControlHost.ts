@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { resolveSourceControlHostSecrets } from "./sourceControlHostSecrets.ts";

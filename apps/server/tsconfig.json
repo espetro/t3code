@@ -2,7 +2,16 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
-    "lib": ["ESNext", "esnext.disposable"]
+    "lib": ["ESNext", "esnext.disposable"],
+    "paths": {
+      "#t3/built-in-drivers": ["./src/provider/builtInDrivers.ts"],
+      "#t3/adapter-infra": ["./src/provider/ProviderOrchestrationAdapterInfrastructure.ts"],
+      "#t3/source-control-definitions": ["./src/sourceControl/sourceControlDefinitions.impl.ts"],
+      "#t3/git-manager": ["./src/git/GitManager.ts"],
+      "#t3/git-vcs-driver": ["./src/vcs/GitVcsDriver.ts"],
+      "#t3/pull-request-service": ["./src/pullRequest/PullRequestService.ts"],
+      "#t3/storage-cleanup": ["./src/storageCleanup.ts"]
+    }
   },
   "include": ["src", "vite.config.ts", "scripts", "integration", "../../scripts/lib"]
 }

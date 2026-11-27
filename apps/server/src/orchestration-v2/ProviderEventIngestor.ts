@@ -31,7 +31,7 @@ import {
   ProviderTurnAnalytics,
   type ProviderTurnAnalyticsContext,
 } from "../telemetry/ProviderUsageAnalytics.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
 import * as EventSink from "./EventSink.ts";
