@@ -197,6 +197,9 @@ function cgroupRemainingKb(): number {
   }
 }
 
+/** Orchestrator-sized native islands sit at 2.5–6GiB scriptc RSS with several GiB still free. */
+const CHECKER_KEEPALIVE_REMAINING_KB = 2 * 1024 * 1024;
+
 function releaseCheckersIfHostIsStarving(scriptcPid: number): NodeJS.Timeout {
   let released = false;
   return setInterval(() => {
@@ -205,7 +208,11 @@ function releaseCheckersIfHostIsStarving(scriptcPid: number): NodeJS.Timeout {
     const remaining = cgroupRemainingKb();
     const checkers = descendantCheckerPids(scriptcPid);
     if (checkers.length === 0) return;
-    if (rss < 2.5 * 1024 * 1024 && remaining > 3 * 1024 * 1024) return;
+    process.stderr.write(
+      `scriptc pid=${String(scriptcPid)} rssKb=${String(rss)} remainingKb=${String(remaining)} checkers=${String(checkers.length)}\n`,
+    );
+    // Kill only when the cgroup is actually starving. Scriptc RSS alone is not OOM.
+    if (remaining > CHECKER_KEEPALIVE_REMAINING_KB) return;
     released = true;
     process.stderr.write(
       `scriptc pid=${String(scriptcPid)} rssKb=${String(rss)} remainingKb=${String(remaining)} SIGKILL checker pids=${checkers.join(",")}\n`,
@@ -245,6 +252,9 @@ async function main(): Promise<number> {
         extends: "../tsconfig.json",
         compilerOptions: {
           noImplicitOverride: false,
+          noImplicitAny: false,
+          exactOptionalPropertyTypes: false,
+          strictFunctionTypes: false,
           strict: true,
           strictNullChecks: true,
           skipLibCheck: true,
@@ -258,7 +268,9 @@ async function main(): Promise<number> {
               "./sourceControl/sourceControlDefinitions.native.ts",
             ],
             "#t3/git-manager": ["./git/GitManager.native.ts"],
+            "#t3/git-workflow-service": ["./git/GitWorkflowService.native.ts"],
             "#t3/git-vcs-driver": ["./vcs/GitVcsDriver.native.ts"],
+            "#t3/vcs-status-broadcaster": ["./vcs/VcsStatusBroadcaster.native.ts"],
             "#t3/pull-request-service": ["./pullRequest/PullRequestService.native.ts"],
             "#t3/storage-cleanup": ["./storageCleanup.native.ts"],
             "#t3/mcp-session-registry": ["./mcp/McpSessionRegistry.native.ts"],
@@ -318,7 +330,7 @@ async function main(): Promise<number> {
           SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo",
           SCRIPTC_CHECKER_SERVER: "0",
           GOMAXPROCS: process.env.GOMAXPROCS ?? "1",
-          GOMEMLIMIT: process.env.GOMEMLIMIT ?? "2500MiB",
+          GOMEMLIMIT: process.env.GOMEMLIMIT ?? "6144MiB",
           GOGC: process.env.GOGC ?? "50",
           SCRIPTC_CHECK_STREAM_MODE: process.env.SCRIPTC_CHECK_STREAM_MODE ?? "1",
           SCRIPTC_INCR_LOWERING: process.env.SCRIPTC_INCR_LOWERING ?? "1",

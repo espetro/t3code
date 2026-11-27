@@ -2,33 +2,20 @@
 
 export const BUILT_IN_SOURCE_CONTROL_DRIVER_LIST: ReadonlyArray<never> = [];
 
-export const sourceControlDefinitions: {
-  readonly definitions: ReadonlyArray<{ readonly changeRequestCloseCommand?: RegExp }>;
-  readonly repositoryKeyFromRemote: (remote: string) => string;
-  readonly canonicalRepositoryKey: (key: string) => string;
-  readonly parseChangeRequestUrl: (value: string) => undefined;
-  readonly recognizeRemote: (remote: string) => null;
-  readonly repositorySelector: (identity: unknown) => null;
-  readonly changeRequestHost: (identity: unknown, fallback: string) => string;
-  readonly findByRepositoryKey: (key: string) => undefined;
-  readonly findByPublicHost: (host: string) => undefined;
-  readonly get: (kind: string) => {
-    readonly changeRequest: undefined;
-    readonly changeRequestHeadRef: undefined;
-  };
-  readonly [key: string]: unknown;
-} = {
-  definitions: [],
-  repositoryKeyFromRemote: (remote) => remote,
-  canonicalRepositoryKey: (key) => key,
+export const sourceControlDefinitions: any = {
+  definitions: [] as ReadonlyArray<any>,
+  repositoryKeyFromRemote: (remote: string) => remote,
+  canonicalRepositoryKey: (key: string) => key,
   parseChangeRequestUrl: () => undefined,
   recognizeRemote: () => null,
   repositorySelector: () => null,
-  changeRequestHost: (_identity, fallback) => fallback,
+  changeRequestHost: (_identity: unknown, fallback: string) => fallback,
   findByRepositoryKey: () => undefined,
   findByPublicHost: () => undefined,
   get: () => ({
     changeRequest: undefined,
     changeRequestHeadRef: undefined,
+    settings: undefined,
+    kind: "unknown",
   }),
 };

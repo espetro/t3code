@@ -17,6 +17,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
+import { dispatchCommand as intakeDispatch } from "./intake.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import {
   projectDomainEventForWire,
@@ -162,10 +163,7 @@ const handleDispatch = (
   void runInContext(
     context,
     decodeCommand(payload).pipe(
-      Effect.flatMap((command) => {
-        const orchestrator = Context.get(context, Orchestrator.OrchestratorV2);
-        return orchestrator.dispatch(command);
-      }),
+      Effect.flatMap((command) => intakeDispatch(command, { managesProviders: true })),
       Effect.match({
         onFailure: (error) => {
           const message =

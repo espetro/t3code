@@ -34,6 +34,9 @@ import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { UsageLimitResetFallback } from "./UsageLimitResetFallback.ts";
+
+export { UsageLimitResetFallback } from "./UsageLimitResetFallback.ts";
 
 const decodeHttpQuotaJson = Schema.decodeUnknownEffect(Schema.fromJsonString(HttpQuotaResponse));
 const decodeHttpQuotaResponse = Effect.fn("UsageLimitSources.decodeHttpQuotaResponse")(function* (
@@ -340,16 +343,6 @@ export function hubPoolResetAt(
   }
   return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
 }
-
-export class UsageLimitResetFallback extends Context.Reference<{
-  readonly resetAt: (
-    driver: ProviderDriverKind,
-    endpoint: string,
-    model: string | null,
-  ) => Effect.Effect<string | null>;
-}>("t3/usage/UsageLimitResetFallback", {
-  defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
-}) {}
 
 export const layerResetFallback = Layer.effect(
   UsageLimitResetFallback,

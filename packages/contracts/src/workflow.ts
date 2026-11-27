@@ -216,11 +216,15 @@ export function applyWorkflowRunsUpdate(
   if (!("_tag" in update)) return update;
   const base = snapshot ?? { workflows: [], runs: [], questions: [] };
   // Stable sorts, so entries of the same moment keep the order they were sent in.
-  const runs = merged(base.runs, update.runs, update.removed, (run) => run.runId).sort(
-    (left, right) =>
-      left.startedAt === right.startedAt ? 0 : left.startedAt < right.startedAt ? 1 : -1,
+  const runs = merged<WorkflowRun>(
+    base.runs,
+    update.runs,
+    update.removed,
+    (run) => run.runId,
+  ).sort((left, right) =>
+    left.startedAt === right.startedAt ? 0 : left.startedAt < right.startedAt ? 1 : -1,
   );
-  const questions = merged(
+  const questions = merged<WorkflowQuestion>(
     base.questions,
     update.questions,
     update.closed.map(workflowQuestionKey),

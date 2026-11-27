@@ -44,7 +44,7 @@ import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
 import * as GitManager from "#t3/git-manager";
-import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import { scratchFolderRoot } from "./project/ManagedProjectFolders.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";

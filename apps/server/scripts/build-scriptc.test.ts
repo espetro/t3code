@@ -20,7 +20,12 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).not.toContain("SCRIPTC_ENTRY");
   expect(script).toContain("unlinkSync(NodePath.join(stubDir, spec.stubFile))");
   expect(script).toContain('SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo"');
-  expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "2500MiB"');
+  expect(script).toContain('GOMEMLIMIT: process.env.GOMEMLIMIT ?? "6144MiB"');
+  expect(script).toContain("CHECKER_KEEPALIVE_REMAINING_KB");
+  expect(script).toContain("remaining > CHECKER_KEEPALIVE_REMAINING_KB");
+  expect(script).not.toContain("rss < 2.5 * 1024 * 1024");
+  expect(script).toContain("noImplicitAny: false");
+  expect(script).toContain("exactOptionalPropertyTypes: false");
   expect(script).toContain("descendantCheckerPids");
   expect(script).toContain("SCRIPTC_LIBNODE");
   expect(script).toContain("SIGKILL checker pids");
@@ -29,7 +34,11 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain("#t3/source-control-definitions");
   expect(script).toContain("sourceControlDefinitions.native.ts");
   expect(script).toContain("GitManager.native.ts");
+  expect(script).toContain("#t3/git-workflow-service");
+  expect(script).toContain("GitWorkflowService.native.ts");
   expect(script).toContain("GitVcsDriver.native.ts");
+  expect(script).toContain("#t3/vcs-status-broadcaster");
+  expect(script).toContain("VcsStatusBroadcaster.native.ts");
   expect(script).toContain("#t3/mcp-session-registry");
   expect(script).toContain("McpSessionRegistry.native.ts");
   expect(script).toContain("scriptcIsland.ts");
@@ -49,6 +58,7 @@ it("native scriptc entry does not import the contracts barrel or server.ts", () 
   expect(serve).not.toContain('@t3tools/contracts"');
   expect(serve).not.toContain("@t3tools/contracts'");
   expect(serve).toContain("@t3tools/contracts/orchestrationV2");
+  expect(serve).toContain("./intake.ts");
   expect(serve).not.toContain("../server.ts");
   expect(serve).not.toContain("../ws.ts");
   expect(serve).not.toContain("effect/http");
@@ -56,6 +66,14 @@ it("native scriptc entry does not import the contracts barrel or server.ts", () 
   expect(serve).not.toContain("@effect/platform-node");
   expect(entry).not.toContain("Flag.optional");
   expect(serve).not.toContain("Effect.never");
+  const intake = NodeFS.readFileSync(new URL("../src/native/intake.ts", import.meta.url), "utf8");
+  expect(intake).not.toContain('@t3tools/contracts"');
+  expect(intake).not.toContain("@t3tools/contracts'");
+  expect(intake).toContain("@t3tools/contracts/auth");
+  expect(intake).toContain("@t3tools/contracts/orchestrationV2");
+  expect(intake).not.toContain("../auth/RpcAuthorization");
+  expect(intake).not.toContain("../orchestration-v2/ThreadMessageIntake");
+  expect(intake).not.toContain("effect/rpc");
 });
 
 it("copies Node sidecar workers next to the native binary", () => {

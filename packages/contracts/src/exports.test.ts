@@ -26,6 +26,8 @@ it("scriptc island omits Effect RpcGroup and HttpApi barrels", () => {
   expect(island).not.toContain("./ipc.ts");
   expect(island).toContain("./orchestrationV2.ts");
   expect(island).toContain("./applicationEvent.ts");
+  expect(island).toContain("./desktopBootstrap.ts");
+  expect(island).toContain("./managedPolicy.ts");
   const rpcPath = NodePath.join(NodeURL.fileURLToPath(new URL("./rpc.ts", import.meta.url)));
   expect(NodeFS.existsSync(rpcPath)).toBe(true);
 });

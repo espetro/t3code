@@ -4,9 +4,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 /** Native host: MCP HTTP stays a Node sidecar (effect/http HttpServer SIGABRT on scriptc). */
+type NativeMcpFn = (...args: ReadonlyArray<any>) => Effect.Effect<any, never, never>;
+
 export class McpSessionRegistry extends Context.Service<
   McpSessionRegistry,
-  Record<string, (...args: ReadonlyArray<never>) => Effect.Effect<never>>
+  {
+    readonly resolve: NativeMcpFn;
+    readonly issue: NativeMcpFn;
+    readonly revokeThread: NativeMcpFn;
+    readonly revokeProviderSession: NativeMcpFn;
+    readonly [key: string]: NativeMcpFn;
+  }
 >()("t3/mcp/McpSessionRegistry") {}
 
 export const layer = Layer.succeed(

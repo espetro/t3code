@@ -51,7 +51,7 @@ import {
 } from "@t3tools/shared/git";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as GitWorkflow from "#t3/git-workflow-service";
 import type * as GitVcsDriver from "#t3/git-vcs-driver";
 import { parseGitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as ProjectService from "../project/ProjectService.ts";

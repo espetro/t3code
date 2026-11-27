@@ -33,7 +33,7 @@ import {
 } from "../telemetry/ProviderUsageAnalytics.ts";
 import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
+import { UsageLimitResetFallback } from "../usage/UsageLimitResetFallback.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";

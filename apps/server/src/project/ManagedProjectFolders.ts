@@ -23,7 +23,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as GitWorkflow from "#t3/git-workflow-service";
 import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProjectService from "./ProjectService.ts";
 
