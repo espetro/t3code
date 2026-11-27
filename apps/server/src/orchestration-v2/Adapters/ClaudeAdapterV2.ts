@@ -2491,6 +2491,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             get modelCatalog() {
               return modelCatalog;
             },
+            set modelCatalog(value) {
+              modelCatalog = value;
+            },
             get normalizeClaudeResultText() {
               return normalizeClaudeResultText;
             },
@@ -3422,6 +3425,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             get connectingTurn() {
               return connectingTurn;
             },
+            set connectingTurn(value) {
+              connectingTurn = value;
+            },
             get cutOffStreamedText() {
               return cutOffStreamedText;
             },
@@ -4321,6 +4327,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             get connectingTurn() {
               return connectingTurn;
             },
+            set connectingTurn(value) {
+              connectingTurn = value;
+            },
             get cutOffStreamedText() {
               return cutOffStreamedText;
             },
@@ -4434,6 +4443,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             },
             get modelCatalog() {
               return modelCatalog;
+            },
+            set modelCatalog(value) {
+              modelCatalog = value;
             },
             get nestedSubagentTaskIds() {
               return nestedSubagentTaskIds;
@@ -4797,6 +4809,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             get modelCatalog() {
               return modelCatalog;
             },
+            set modelCatalog(value) {
+              modelCatalog = value;
+            },
             get pendingRuntimeRequests() {
               return pendingRuntimeRequests;
             },
@@ -5140,6 +5155,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             get modelCatalog() {
               return modelCatalog;
             },
+            set modelCatalog(value) {
+              modelCatalog = value;
+            },
             get onElicitation() {
               return onElicitation;
             },
@@ -5289,6 +5307,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               },
               get modelCatalog() {
                 return modelCatalog;
+              },
+              set modelCatalog(value) {
+                modelCatalog = value;
               },
               get offerBufferedWake() {
                 return offerBufferedWake;
@@ -5507,6 +5528,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               },
               get modelCatalog() {
                 return modelCatalog;
+              },
+              set modelCatalog(value) {
+                modelCatalog = value;
               },
               get path() {
                 return path;

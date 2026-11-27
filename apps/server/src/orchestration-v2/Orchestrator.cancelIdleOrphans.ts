@@ -236,8 +236,9 @@ import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
-export const bindCancelIdleOrphans = (ctx: any) =>
-  Effect.fn("Orchestrator.cancelIdleOrphans")(
+export const bindCancelIdleOrphans = (ctx: any) => {
+  const { OrchestratorProjectionError, isOrchestratorProjectionError } = pickScriptcBindCtx(ctx);
+  return Effect.fn("Orchestrator.cancelIdleOrphans")(
     function* (input: {
       readonly command: Extract<
         OrchestrationV2ServerCommand,
@@ -338,3 +339,4 @@ export const bindCancelIdleOrphans = (ctx: any) =>
         ),
       ),
   );
+};

@@ -465,7 +465,7 @@ import {
 export const bindStartTurn = (ctx: any) =>
   Effect.fn("ClaudeAdapterV2.startTurn")(
     function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) {
-      const {
+      let {
         absorbedWakes,
         activeTurn,
         announceAutoFallback,
@@ -512,6 +512,7 @@ export const bindStartTurn = (ctx: any) =>
       } = pickScriptcBindCtx(ctx);
 
       modelCatalog = yield* loadModelCatalog;
+      ctx.modelCatalog = modelCatalog;
       const startedAt = yield* DateTime.now;
       const nativeThreadId = yield* getNativeThreadId(turnInput.providerThread);
       const nativeTurnId = `turn:${turnInput.attemptId}`;

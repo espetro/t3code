@@ -142,9 +142,10 @@ import { routineSpan } from "@t3tools/shared/observability";
 import type { PayloadRow } from "./ProjectionStore.ts";
 
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
-export const bindApply = (ctx: any) =>
+export const bindApply = (ctx: any) => {
+  const { ProjectionStoreApplyEventError } = pickScriptcBindCtx(ctx);
   /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
-  Effect.fnUntraced(
+  return Effect.fnUntraced(
     function* (event) {
       const {
         ProjectionStoreApplyEventError,
@@ -1140,3 +1141,4 @@ export const bindApply = (ctx: any) =>
         ),
       ),
   );
+};

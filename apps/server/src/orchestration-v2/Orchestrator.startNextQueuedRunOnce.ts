@@ -237,8 +237,9 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import * as ServerSettings from "../serverSettings.ts";
 
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
-export const bindStartNextQueuedRunOnce = (ctx: any) =>
-  Effect.fn("Orchestrator.startNextQueuedRun")(
+export const bindStartNextQueuedRunOnce = (ctx: any) => {
+  const { failQueuedRunStart } = pickScriptcBindCtx(ctx);
+  return Effect.fn("Orchestrator.startNextQueuedRun")(
     function* (
       threadId: ThreadId,
       options?: {
@@ -1201,3 +1202,4 @@ export const bindStartNextQueuedRunOnce = (ctx: any) =>
         Effect.catch((cause) => failQueuedRunStart(threadId, cause, options?.queuedRunId)),
       ),
   );
+};

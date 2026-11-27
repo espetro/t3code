@@ -237,7 +237,7 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import * as ServerSettings from "../serverSettings.ts";
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindRecoverDelegatedTasks = (ctx: any) =>
-  Effect.gen(function* () {
+  Effect.fn("Orchestrator.recoverDelegatedTasks")(function* () {
     const {
       delegatedTaskTerminalStatus,
       finalizeAppOwnedSubagent,

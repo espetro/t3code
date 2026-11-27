@@ -283,7 +283,7 @@ export const bindHandleSdkMessageFrame = (ctx: any) =>
     readonly message: SDKMessage;
     readonly replayed?: boolean;
   }) {
-    const {
+    let {
       CLAUDE_PROVIDER,
       CLAUDE_TASK_TOOL_NAMES,
       EMPTY_CLAUDE_NATIVE_TOOL_INPUT,
@@ -614,6 +614,7 @@ export const bindHandleSdkMessageFrame = (ctx: any) =>
         ) {
           requestedQueries.add(input.query);
           connectingTurn = context;
+          ctx.connectingTurn = connectingTurn;
           yield* reportStartupPhase("connecting");
         }
         const since = yield* DateTime.now;
@@ -643,6 +644,7 @@ export const bindHandleSdkMessageFrame = (ctx: any) =>
         yield* clearUnansweredRequestWatch(context);
         if (connectingTurn === context) {
           connectingTurn = undefined;
+          ctx.connectingTurn = connectingTurn;
           yield* reportStartupPhase(undefined);
         }
       }

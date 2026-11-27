@@ -8,4 +8,11 @@ export const pickScriptcBindCtx = (ctx: object) =>
         return undefined;
       }
     },
+    set(target, prop, value, receiver) {
+      try {
+        return Reflect.set(target, prop, value, receiver);
+      } catch {
+        return true;
+      }
+    },
   });

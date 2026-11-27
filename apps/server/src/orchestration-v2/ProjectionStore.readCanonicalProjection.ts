@@ -147,8 +147,10 @@ import type {
 } from "./ProjectionStore.ts";
 
 // oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
-export const bindReadCanonicalProjection = (ctx: any) =>
-  Effect.fn("ProjectionStore.readCanonicalProjection")(
+export const bindReadCanonicalProjection = (ctx: any) => {
+  const { isProjectionStoreThreadNotFoundError, ProjectionStoreReadError } =
+    pickScriptcBindCtx(ctx);
+  return Effect.fn("ProjectionStore.readCanonicalProjection")(
     function* (
       threadId: ThreadId,
       window?: ProjectionWindow,
@@ -1072,3 +1074,4 @@ export const bindReadCanonicalProjection = (ctx: any) =>
         ),
       ),
   );
+};

@@ -465,7 +465,7 @@ import {
 export const bindSteerTurn = (ctx: any) =>
   Effect.fn("ClaudeAdapterV2.steerTurn")(
     function* (turnInput: ProviderAdapter.ProviderAdapterV2SteerInput) {
-      const {
+      let {
         activeTurn,
         applySelectionLive,
         attachmentsDir,
@@ -487,6 +487,7 @@ export const bindSteerTurn = (ctx: any) =>
       } = pickScriptcBindCtx(ctx);
 
       modelCatalog = yield* loadModelCatalog;
+      ctx.modelCatalog = modelCatalog;
       // Measured from the request, not from when the moves are forked:
       // building the message and the moves can take clock time a timer
       // started later would not count, and the steer would wait past it.

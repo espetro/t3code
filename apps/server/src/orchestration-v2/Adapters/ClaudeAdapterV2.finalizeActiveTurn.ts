@@ -284,7 +284,7 @@ export const bindFinalizeActiveTurn = (ctx: any) =>
     readonly threadDisposition?: "reusable" | "broken";
     readonly result?: SDKResultMessage;
   }) {
-    const {
+    let {
       CLAUDE_PROVIDER,
       activeTurn,
       assistantDeltas,
@@ -338,6 +338,7 @@ export const bindFinalizeActiveTurn = (ctx: any) =>
     input.context.steersClosed = true;
     if (connectingTurn === input.context) {
       connectingTurn = undefined;
+      ctx.connectingTurn = connectingTurn;
       yield* reportStartupPhase(undefined);
     }
     yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
