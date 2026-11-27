@@ -33,6 +33,7 @@
     "check:changed": "node scripts/check-changed.ts",
     "report:server": "node scripts/metrics/server/server-metrics.ts",
     "report:client": "node scripts/metrics/web/client-metrics.ts",
+    "report:native-server": "node scripts/metrics/native-server/native-server-metrics.ts",
     "lint": "vp lint --report-unused-disable-directives",
     "i18n:untranslated": "node scripts/i18n-untranslated.ts",
     "knip": "knip --preprocessor ./scripts/knip-schemas.ts",

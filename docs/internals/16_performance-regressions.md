@@ -5,6 +5,7 @@ One benchmark per surface, a CI gate on wire size, and a startup profiler:
 | Checks                 | Run                               | Source                                                                       |
 | :--------------------- | :-------------------------------- | :--------------------------------------------------------------------------- |
 | Server process         | `vp run report:server`            | [`scripts/metrics/server`](../../scripts/metrics/server)                     |
+| Node vs scriptc server | `vp run report:native-server`     | [`scripts/metrics/native-server`](../../scripts/metrics/native-server)       |
 | Web client             | `vp run report:client`            | [`scripts/metrics/web`](../../scripts/metrics/web)                           |
 | Mobile client          | `vp run mobile:metrics`           | [`scripts/metrics/mobile`](../../scripts/metrics/mobile)                     |
 | Thread payload budgets | CI (`thread-transfer-report.yml`) | [`apps/server/integration`](../../apps/server/integration) `TransferBudget*` |
@@ -61,6 +62,19 @@ Anthropic API and the real `claude` CLI:
   and full runs. `--help` says which scenario to trust for what.
 - Test macOS, Windows, and Linux with `--no-agent-scope`: Linux systemd agent scopes mask
   per-process polling paths that other platforms run.
+
+## Node vs scriptc server process
+
+`report:native-server` is the same scripted RPC peer (`subscribeThread` / `dispatchCommand`) against
+two servers: `node dist/bin.mjs` and a scriptc binary of that entry. A device is not part of the
+measurement. scriptc `--lib` for iOS/Android is unsupported here: those archives have no React
+Native runtime, and mobile does not own the workspace.
+
+The live-turn wall may reach ~2× Node; the other four cases (cold start, idle RSS, replay, reconnect)
+must stay ahead. That gate is in
+[`scripts/metrics/native-server/report.ts`](../../scripts/metrics/native-server/report.ts). It is not
+a default PR check — run `ab` on one machine when comparing binaries. Bare `vp run report:native-server`
+prints help and measures nothing.
 
 ## Client switch metrics
 

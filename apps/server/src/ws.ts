@@ -24,6 +24,8 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
+import * as SchemaParser from "effect/SchemaParser";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
@@ -309,6 +311,42 @@ import { requestUrl } from "./requestUrl.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
+
+// Live subscribeThread frames this process just produced. JSON.stringify uses DateTime.toJSON;
+// Schema.is of the thread-stream union is the encode hot path RpcServer would otherwise run.
+const trustedLiveRpcFrames = new WeakSet<object>();
+
+export function trustLiveRpcFrame<T extends object>(value: T): T {
+  trustedLiveRpcFrames.add(value);
+  return value;
+}
+
+export const isTrustedLiveRpcFrame = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && trustedLiveRpcFrames.has(value);
+
+const isTrustedLiveRpcChunk = (value: unknown): boolean =>
+  isTrustedLiveRpcFrame(value) ||
+  (Array.isArray(value) && value.length > 0 && value.every(isTrustedLiveRpcFrame));
+
+const markLiveThreadStreamItem = (item: OrchestrationV2ThreadStreamItem) =>
+  item.kind === "event" ? trustLiveRpcFrame(item) : item;
+
+export const codecForSkippingTrustedLive: RpcSerialization.CodecFor = (schema) => {
+  const json = Schema.toCodecJson(schema);
+  const decodeJson = SchemaParser.decodeUnknownEffect(json);
+  const encodeJson = SchemaParser.encodeUnknownEffect(json);
+  return Schema.toCodecJson(
+    Schema.declare((_u: unknown): _u is typeof json.Type => true, {
+      toCodecJson: () =>
+        Schema.link<typeof json.Type>()(Schema.Unknown, {
+          decode: SchemaGetter.transformEffect((input, options) => decodeJson(input, options)),
+          encode: SchemaGetter.transformEffect((type, options) =>
+            isTrustedLiveRpcChunk(type) ? Effect.succeed(type) : encodeJson(type, options),
+          ),
+        }),
+    }),
+  );
+};
 
 const resolveDiscoveryForConfig = <A, E, R>(
   discovery: Effect.Effect<A, E, R>,
@@ -942,7 +980,10 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     const dedupeBodies = input.acceptDedupedBodies === true;
     // Replay, snapshot, and live tail share one deduper: it must see every delivered record.
     const withLiveDedupe = <E, R>(stream: Stream.Stream<OrchestrationV2ThreadStreamItem, E, R>) =>
-      dedupeBodies ? Stream.suspend(() => Stream.map(stream, makeLiveBodyDeduper())) : stream;
+      Stream.map(
+        dedupeBodies ? Stream.suspend(() => Stream.map(stream, makeLiveBodyDeduper())) : stream,
+        markLiveThreadStreamItem,
+      );
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
 
     yield* Effect.annotateCurrentSpan({
@@ -3867,7 +3908,10 @@ export const layer = Layer.unwrap(
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
-            Effect.provideService(RpcServer.Protocol, withOutputWindow(protocol)),
+            Effect.provideService(
+              RpcServer.Protocol,
+              withOutputWindow({ ...protocol, codecFor: codecForSkippingTrustedLive }),
+            ),
             Effect.provide(
               Layer.merge(
                 RpcAuthorization.layer(session.scopes, (method, payload) => {
