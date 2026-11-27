@@ -72,6 +72,7 @@ if (
   NodeRuntime.runMain(
     Command.run(cli, { version: packageJson.version }).pipe(
       Effect.provide(NodeServices.layer),
-    ) as Effect.Effect<void>,
+      Effect.orDie,
+    ),
   );
 }

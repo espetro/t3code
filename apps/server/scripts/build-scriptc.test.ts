@@ -30,6 +30,9 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain("sourceControlDefinitions.native.ts");
   expect(script).toContain("GitManager.native.ts");
   expect(script).toContain("GitVcsDriver.native.ts");
+  expect(script).toContain("#t3/mcp-session-registry");
+  expect(script).toContain("McpSessionRegistry.native.ts");
+  expect(script).toContain("scriptcIsland.ts");
   expect(script).toContain("scriptc-stubs/OpenCodeRuntime.ts");
   expect(script).toContain("scriptc-native-schema-stub");
   expect(script).toContain("effect-codex-app-server/schema");
@@ -43,7 +46,9 @@ it("native scriptc entry does not import the contracts barrel or server.ts", () 
   expect(entry).not.toContain("@t3tools/contracts");
   expect(entry).not.toContain("./cli/server.ts");
   expect(entry).not.toContain("./cli/auth.ts");
-  expect(serve).not.toContain("@t3tools/contracts");
+  expect(serve).not.toContain('@t3tools/contracts"');
+  expect(serve).not.toContain("@t3tools/contracts'");
+  expect(serve).toContain("@t3tools/contracts/orchestrationV2");
   expect(serve).not.toContain("../server.ts");
   expect(serve).not.toContain("../ws.ts");
   expect(serve).not.toContain("effect/http");

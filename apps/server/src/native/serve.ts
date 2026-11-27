@@ -1,60 +1,40 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Native host binds node:http, not Effect HttpRouter.
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttp from "node:http";
 import type * as NodeNet from "node:net";
-import * as NodeSqlite from "node:sqlite";
 
+import { ThreadId } from "@t3tools/contracts/baseSchemas";
+import {
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2Command,
+} from "@t3tools/contracts/orchestrationV2";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
-import { ensureMetricsSchema } from "./ensureMetricsSchema.ts";
-import { hasNativeSession, issueNativeSession, sqlitePath } from "./sessionFile.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import {
+  projectDomainEventForWire,
+  threadStreamEventItem,
+} from "../orchestration-v2/WireProjection.ts";
+import { layerNativeServe } from "./orchestrationLayer.ts";
+import { hasNativeSession, issueNativeSession } from "./sessionFile.ts";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const decodeCommand = Schema.decodeUnknownEffect(OrchestrationV2Command);
+
+type NativeServices = Orchestrator.OrchestratorV2 | EventSink.EventSinkV2 | Scope.Scope;
 
 const bearerToken = (header: string | undefined): string => {
   const value = header === undefined ? "" : header;
   const match = /^Bearer\s+(\S+)/i.exec(value);
   if (match === null) return "";
   return String(match[1]);
-};
-
-const replayItems = (
-  baseDir: string,
-  threadId: string,
-  afterSequence: number,
-  requestCompletionMarker: boolean,
-): Array<unknown> => {
-  const db = new NodeSqlite.DatabaseSync(sqlitePath(baseDir), { readOnly: true });
-  const items: Array<unknown> = [];
-  try {
-    const rows = db
-      .prepare(
-        `SELECT event_id, stream_id, stream_version, event_type, occurred_at, payload_json
-         FROM orchestration_events
-         WHERE stream_id = ? AND stream_version > ?
-         ORDER BY stream_version ASC`,
-      )
-      .all(threadId, afterSequence);
-    for (const row of rows) {
-      const record = row as Record<string, unknown>;
-      items.push({
-        kind: "event",
-        sequence: Number(record.stream_version),
-        event: {
-          id: String(record.event_id),
-          threadId: String(record.stream_id),
-          type: String(record.event_type),
-          occurredAt: String(record.occurred_at),
-          payload: JSON.parse(String(record.payload_json)),
-        },
-      });
-    }
-  } finally {
-    db.close();
-  }
-  if (requestCompletionMarker) {
-    items.push({ kind: "synchronized" });
-  }
-  return items;
 };
 
 const sendHttp = (
@@ -105,7 +85,108 @@ const unmask = (payload: Buffer, mask: Buffer): Buffer => {
   return out;
 };
 
-const handleRpcMessage = (socket: NodeNet.Socket, baseDir: string, message: unknown) => {
+const sendFailure = (socket: NodeNet.Socket, requestId: unknown, message: string) => {
+  sendRpc(socket, {
+    _tag: "Exit",
+    requestId,
+    exit: {
+      _tag: "Failure",
+      cause: [{ _tag: "Fail", error: { message } }],
+    },
+  });
+};
+
+const sendSuccess = (socket: NodeNet.Socket, requestId: unknown, value: unknown) => {
+  sendRpc(socket, {
+    _tag: "Exit",
+    requestId,
+    exit: { _tag: "Success", value },
+  });
+};
+
+const runInContext = <A, E>(
+  context: Context.Context<NativeServices>,
+  effect: Effect.Effect<A, E, NativeServices>,
+) => Effect.runPromise(effect.pipe(Effect.provide(context)));
+
+const handleSubscribe = (
+  socket: NodeNet.Socket,
+  context: Context.Context<NativeServices>,
+  requestId: unknown,
+  payload: Record<string, unknown>,
+) => {
+  const threadId = String(payload.threadId === undefined ? "" : payload.threadId);
+  const afterSequence = Number(payload.afterSequence === undefined ? 0 : payload.afterSequence);
+  const requestCompletionMarker = payload.requestCompletionMarker === true;
+  const sink = Context.get(context, EventSink.EventSinkV2);
+  if (requestCompletionMarker) {
+    sendRpc(socket, {
+      _tag: "Chunk",
+      requestId,
+      values: [{ kind: "synchronized" }],
+    });
+  }
+  const fiber = Effect.runFork(
+    sink
+      .stream({
+        threadId: ThreadId.make(threadId),
+        afterSequence,
+        bounded: true,
+      })
+      .pipe(
+        Stream.map((stored) =>
+          threadStreamEventItem({
+            ...stored,
+            event: projectDomainEventForWire(stored.event),
+          }),
+        ),
+        Stream.runForEach((item) =>
+          Effect.sync(() => {
+            sendRpc(socket, { _tag: "Chunk", requestId, values: [item] });
+          }),
+        ),
+        Effect.provide(context),
+      ),
+  );
+  socket.once("close", () => {
+    Effect.runFork(Fiber.interrupt(fiber));
+  });
+};
+
+const handleDispatch = (
+  socket: NodeNet.Socket,
+  context: Context.Context<NativeServices>,
+  requestId: unknown,
+  payload: unknown,
+) => {
+  void runInContext(
+    context,
+    decodeCommand(payload).pipe(
+      Effect.flatMap((command) => {
+        const orchestrator = Context.get(context, Orchestrator.OrchestratorV2);
+        return orchestrator.dispatch(command);
+      }),
+      Effect.match({
+        onFailure: (error) => {
+          const message =
+            typeof error === "object" && error !== null && "message" in error
+              ? String(error.message)
+              : "Failed to dispatch orchestration command";
+          sendFailure(socket, requestId, message);
+        },
+        onSuccess: (result) => {
+          sendSuccess(socket, requestId, { sequence: result.sequence });
+        },
+      }),
+    ),
+  );
+};
+
+const handleRpcMessage = (
+  socket: NodeNet.Socket,
+  context: Context.Context<NativeServices>,
+  message: unknown,
+) => {
   if (typeof message !== "object" || message === null) return;
   const row = message as Record<string, unknown>;
   if (row._tag === "Ping") {
@@ -119,44 +200,23 @@ const handleRpcMessage = (socket: NodeNet.Socket, baseDir: string, message: unkn
     typeof row.payload === "object" && row.payload !== null
       ? (row.payload as Record<string, unknown>)
       : {};
-  if (method === "orchestration.subscribeThread") {
-    const items = replayItems(
-      baseDir,
-      String(payload.threadId === undefined ? "" : payload.threadId),
-      Number(payload.afterSequence === undefined ? 0 : payload.afterSequence),
-      payload.requestCompletionMarker === true,
-    );
-    let index = 0;
-    while (index < items.length) {
-      const values = items.slice(index, index + 64);
-      index = index + 64;
-      if (values.length > 0) {
-        sendRpc(socket, { _tag: "Chunk", requestId, values });
-      }
-    }
-    sendRpc(socket, { _tag: "Exit", requestId, exit: { _tag: "Success", value: undefined } });
+  if (method === ORCHESTRATION_V2_WS_METHODS.subscribeThread) {
+    handleSubscribe(socket, context, requestId, payload);
     return;
   }
-  if (method === "orchestration.dispatchCommand") {
-    sendRpc(socket, {
-      _tag: "Exit",
-      requestId,
-      exit: { _tag: "Success", value: { sequence: 0 } },
-    });
+  if (method === ORCHESTRATION_V2_WS_METHODS.dispatchCommand) {
+    handleDispatch(socket, context, requestId, payload);
     return;
   }
-  sendRpc(socket, {
-    _tag: "Exit",
-    requestId,
-    exit: {
-      _tag: "Failure",
-      cause: [{ _tag: "Fail", error: { message: `unsupported ${method}` } }],
-    },
-  });
+  sendFailure(socket, requestId, `unsupported ${method}`);
 };
 
-const attachWebSocket = (socket: NodeNet.Socket, baseDir: string) => {
-  let buffer = Buffer.alloc(0);
+const attachWebSocket = (
+  socket: NodeNet.Socket,
+  context: Context.Context<NativeServices>,
+  head: Buffer,
+) => {
+  let buffer = head.length === 0 ? Buffer.alloc(0) : Buffer.from(head);
   socket.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
     while (buffer.length >= 2) {
@@ -193,19 +253,25 @@ const attachWebSocket = (socket: NodeNet.Socket, baseDir: string) => {
       }
       if (opcode !== 1) continue;
       const body = masked ? unmask(payload, mask) : payload;
-      const decoded: unknown = JSON.parse(body.toString("utf8"));
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(body.toString("utf8"));
+      } catch {
+        continue;
+      }
       const messages = Array.isArray(decoded) ? decoded : [decoded];
       for (const item of messages) {
-        handleRpcMessage(socket, baseDir, item);
+        handleRpcMessage(socket, context, item);
       }
     }
   });
 };
 
-const listenNative = (options: {
+export const listenNative = (options: {
   readonly baseDir: string;
   readonly host: string;
   readonly port: number;
+  readonly context: Context.Context<NativeServices>;
 }) => {
   const server = NodeHttp.createServer((request, response) => {
     const path = request.url === undefined ? "/" : request.url;
@@ -250,24 +316,56 @@ const listenNative = (options: {
       socket.write(
         `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
       );
-      attachWebSocket(socket, options.baseDir);
+      attachWebSocket(socket, options.context, _head);
     },
   );
-  server.listen(options.port, options.host);
+  return server;
 };
+
+export const startNativeServe = Effect.fn("native.startServe")(function* (options: {
+  readonly baseDir: string;
+  readonly host: string;
+  readonly port: number;
+}) {
+  const context = yield* Layer.build(layerNativeServe(options.baseDir));
+  const pairingToken = issueNativeSession(options.baseDir);
+  const server = listenNative({
+    baseDir: options.baseDir,
+    host: options.host,
+    port: options.port,
+    context: context as Context.Context<NativeServices>,
+  });
+  yield* Effect.callback<void>((resume) => {
+    server.listen(options.port, options.host, () => {
+      resume(Effect.void);
+    });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : options.port;
+  yield* Effect.addFinalizer(() =>
+    Effect.callback<void>((resume) => {
+      server.close(() => {
+        resume(Effect.void);
+      });
+    }),
+  );
+  return { pairingToken, port, host: options.host };
+});
 
 export const runNativeServe = (options: {
   readonly baseDir: string;
   readonly host: string;
   readonly port: number;
 }) =>
-  Effect.sync(() => {
-    ensureMetricsSchema(options.baseDir);
-    const pairingToken = issueNativeSession(options.baseDir);
-    const originHost = options.host === "0.0.0.0" ? "127.0.0.1" : options.host;
-    listenNative(options);
-    process.stdout.write(
-      `pairingUrl: http://${originHost}:${String(options.port)}/pair#token=${pairingToken}\n`,
-    );
-    setInterval(() => undefined, 1 << 30);
-  });
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* startNativeServe(options);
+      const originHost = options.host === "0.0.0.0" ? "127.0.0.1" : options.host;
+      process.stdout.write(
+        `pairingUrl: http://${originHost}:${String(started.port)}/pair#token=${started.pairingToken}\n`,
+      );
+      yield* Effect.callback<void>((_resume) => {
+        setInterval(() => undefined, 1 << 30);
+      });
+    }),
+  );

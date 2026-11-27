@@ -18,6 +18,26 @@
     "./relay": {
       "types": "./src/relay.ts",
       "import": "./src/relay.ts"
+    },
+    "./orchestrationV2": {
+      "types": "./src/orchestrationV2.ts",
+      "import": "./src/orchestrationV2.ts"
+    },
+    "./applicationEvent": {
+      "types": "./src/applicationEvent.ts",
+      "import": "./src/applicationEvent.ts"
+    },
+    "./orchestrationDispatch": {
+      "types": "./src/orchestrationDispatch.ts",
+      "import": "./src/orchestrationDispatch.ts"
+    },
+    "./auth": {
+      "types": "./src/auth.ts",
+      "import": "./src/auth.ts"
+    },
+    "./baseSchemas": {
+      "types": "./src/baseSchemas.ts",
+      "import": "./src/baseSchemas.ts"
     }
   },
   "scripts": {

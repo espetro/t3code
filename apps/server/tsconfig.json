@@ -10,7 +10,8 @@
       "#t3/git-manager": ["./src/git/GitManager.ts"],
       "#t3/git-vcs-driver": ["./src/vcs/GitVcsDriver.ts"],
       "#t3/pull-request-service": ["./src/pullRequest/PullRequestService.ts"],
-      "#t3/storage-cleanup": ["./src/storageCleanup.ts"]
+      "#t3/storage-cleanup": ["./src/storageCleanup.ts"],
+      "#t3/mcp-session-registry": ["./src/mcp/McpSessionRegistry.ts"]
     }
   },
   "include": ["src", "vite.config.ts", "scripts", "integration", "../../scripts/lib"]

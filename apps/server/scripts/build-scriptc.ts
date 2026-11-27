@@ -261,6 +261,8 @@ async function main(): Promise<number> {
             "#t3/git-vcs-driver": ["./vcs/GitVcsDriver.native.ts"],
             "#t3/pull-request-service": ["./pullRequest/PullRequestService.native.ts"],
             "#t3/storage-cleanup": ["./storageCleanup.native.ts"],
+            "#t3/mcp-session-registry": ["./mcp/McpSessionRegistry.native.ts"],
+            "@t3tools/contracts": ["../../../packages/contracts/src/scriptcIsland.ts"],
             "@t3tools/provider-opencode/server/OpenCodeRuntime": [
               "./scriptc-stubs/OpenCodeRuntime.ts",
             ],
