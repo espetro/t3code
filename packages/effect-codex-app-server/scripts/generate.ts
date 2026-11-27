@@ -13,6 +13,8 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { splitGeneratedSchemaFile } from "../../../scripts/split-generated-schema.ts";
+
 const UPSTREAM_REF = "687a119f0fcaace47e1f1abcc77cec6c813fd6da";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
@@ -919,6 +921,8 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   yield* fs.writeFileString(schemaOutputPath, schemaOutput);
   yield* fs.writeFileString(metaOutputPath, metaOutput);
   yield* fs.writeFileString(namespacesOutputPath, namespacesOutput);
+  // tsc-ts SIGSEGV on the 2MB Schema file (scriptc#4381); barrel + parts stay under 100KB.
+  splitGeneratedSchemaFile(schemaOutputPath);
 
   yield* Effect.log(`Generated Codex App Server schemas from ${UPSTREAM_REF}`);
 

@@ -14,6 +14,10 @@ it("disables noImplicitOverride in the scriptc tsconfig overlay", () => {
 it("writes a src overlay whose extends path is not the overlay file", () => {
   const script = NodeFS.readFileSync(new URL("./build-scriptc.ts", import.meta.url), "utf8");
   expect(script).toContain('extends: "../tsconfig.json"');
+  expect(script).toContain("**/*.test.ts");
+  expect(script).toContain('include: ["binScriptc.ts"]');
+  expect(script).toContain('SCRIPTC_CHECKER: "tsgo"');
+  expect(script).toContain("scriptc-native-overlay");
   expect(script).not.toContain("symlinkSync");
 });
 

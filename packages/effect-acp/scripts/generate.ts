@@ -13,6 +13,8 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { splitGeneratedSchemaFile } from "../../../scripts/split-generated-schema.ts";
+
 const V2_SCHEMA_RELEASE = "schema-v2.0.0-alpha.3";
 const V1_SCHEMA_RELEASE = "schema-v1.21.0";
 
@@ -125,6 +127,9 @@ const writeGeneratedFiles = Effect.fn("writeGeneratedFiles")(function* (
   yield* fs.writeFileString(schemaOutputPath, schemaOutput);
   yield* fs.writeFileString(v1SchemaOutputPath, v1SchemaOutput);
   yield* fs.writeFileString(metaOutputPath, metaOutput);
+  // tsc-ts SIGSEGV on the 400KB+ Schema files (scriptc#4381); barrel + parts stay under 100KB.
+  splitGeneratedSchemaFile(schemaOutputPath);
+  splitGeneratedSchemaFile(v1SchemaOutputPath);
 });
 
 function collectSchemaEntries(

@@ -110,6 +110,17 @@ import {
   openCodeToolTurnItem,
   stripOpenCodeReturnedSentMessage,
 } from "../toolItems.ts";
+import { bindOnTurnEvent } from "./adapter.onTurnEvent.ts";
+import { bindRoute } from "./adapter.route.ts";
+import { bindFinishTurn } from "./adapter.finishTurn.ts";
+import { bindReconcile } from "./adapter.reconcile.ts";
+import { bindBackfill } from "./adapter.backfill.ts";
+import { bindSubmit } from "./adapter.submit.ts";
+import { bindHandleEvent } from "./adapter.handleEvent.ts";
+import { bindAttachChild } from "./adapter.attachChild.ts";
+import { bindStartChildTurn } from "./adapter.startChildTurn.ts";
+import { bindStopBackground } from "./adapter.stopBackground.ts";
+import { bindPrepareTurn } from "./adapter.prepareTurn.ts";
 
 const NativeGoal = Schema.NullOr(
   Schema.Struct({
@@ -2173,98 +2184,68 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       };
     };
 
-    const attachChild = Effect.fnUntraced(function* (call: SubagentCall, childId: string) {
-      if (call.child !== undefined) return;
-      const info = announced.get(childId);
-      announced.delete(childId);
-      const now = yield* DateTime.now;
-      const nodeId = idAllocator.derive.nodeFromProviderItem({
-        driver,
-        nativeItemId: call.nativeId,
-      });
-      const childThreadId = idAllocator.derive.subagentThread({
-        driver,
-        nativeThreadId: childId,
-        providerInstanceId: instanceId,
-      });
-      const providerThreadId = idAllocator.derive.providerThread({
-        driver,
-        nativeThreadId: childId,
-        providerInstanceId: instanceId,
-      });
-      if (info?.model !== undefined) call.model = `${info.model.providerID}/${info.model.id}`;
-      call.title = call.title ?? info?.title ?? null;
-      const parentThread = call.turn.input.appThread;
-      const appThread = makeSubagentChildThread({
-        parentThread,
-        childThreadId,
-        parentNodeId: nodeId,
-        activeProviderThreadId: providerThreadId,
-        providerInstanceId: instanceId,
-        modelSelection: {
-          instanceId,
-          model: call.model ?? call.turn.input.modelSelection.model,
-        },
-        title: subagentThreadTitle({
-          parentTitle: parentThread.title,
-          title: call.title,
-          prompt: call.prompt,
-          ordinal: call.ordinal,
-        }),
-        now,
-        createdBy: "agent",
-        creationSource: "provider",
-      });
-      const providerThread: OrchestrationV2ProviderThread = {
-        id: providerThreadId,
-        driver,
-        providerInstanceId: instanceId,
-        providerSessionId: input.providerSessionId,
-        appThreadId: childThreadId,
-        ownerNodeId: nodeId,
-        nativeThreadRef: ref(childId),
-        nativeConversationHeadRef: null,
-        status: "active",
-        firstRunOrdinal: null,
-        lastRunOrdinal: null,
-        handoffIds: [],
-        forkedFrom: null,
-        createdAt: now,
-        updatedAt: now,
-      };
-      const previous = threads.get(childId);
-      // A call to a running child steers that run; OpenCode reports it once for all its calls.
-      if (previous?.active !== undefined) call.run = previous.subagent?.turns;
-      const subagent = {
-        call,
-        appThread,
-        turns: previous?.subagent?.turns ?? 0,
-        prompt: call.prompt,
-        queued: undefined,
-      };
-      const child =
-        previous ?? newThreadState(childId, providerThread, call.state.directory, subagent);
-      child.subagent = subagent;
-      child.sessionScopedBackground = false;
-      child.model = info?.model ?? child.model;
-      child.providerThread = withReportedModel(providerThread, child.model);
-      child.directory = call.state.directory;
-      child.agent = info?.agent ?? call.agent ?? child.agent;
-      child.rules = info?.permissions ?? child.rules;
-      threads.set(childId, child);
-      childOwners.set(childId, rootOf(call.state));
-      call.child = child;
-      yield* emit({ type: "app_thread.created", driver, appThread });
-      yield* emitProviderThread(child);
-      yield* emitSubagent(call);
-      // Reused child sessions may retain old mode rules; refresh policy as soon as the call identifies them.
-      if (info === undefined) {
-        yield* writeRules(child, rootOf(call.state).policy).pipe(
-          Effect.timeout(REQUEST_REPLY_TIMEOUT),
-          Effect.ignore({ log: true }),
-        );
-      }
-    });
+    const attachChild = bindAttachChild({
+          get REQUEST_REPLY_TIMEOUT() {
+            return REQUEST_REPLY_TIMEOUT;
+          },
+          get announced() {
+            return announced;
+          },
+          get calls() {
+            return calls;
+          },
+          get childOwners() {
+            return childOwners;
+          },
+          get driver() {
+            return driver;
+          },
+          get emit() {
+            return emit;
+          },
+          get emitProviderThread() {
+            return emitProviderThread;
+          },
+          get emitSubagent() {
+            return emitSubagent;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get model() {
+            return model;
+          },
+          get modelSelection() {
+            return modelSelection;
+          },
+          get nativeId() {
+            return nativeId;
+          },
+          get newThreadState() {
+            return newThreadState;
+          },
+          get ref() {
+            return ref;
+          },
+          get rootOf() {
+            return rootOf;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get threads() {
+            return threads;
+          },
+          get updatedAt() {
+            return updatedAt;
+          },
+          get withReportedModel() {
+            return withReportedModel;
+          }
+        });
 
     const settleCall: (
       call: SubagentCall,
@@ -2296,92 +2277,65 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitSubagent(call);
     });
 
-    const startChildTurn = Effect.fnUntraced(function* (child: ThreadState) {
-      const subagent = child.subagent;
-      if (subagent === undefined || child.active !== undefined) return;
-      subagent.turns += 1;
-      for (const call of callsAttachedTo(child)) call.run ??= subagent.turns;
-      const startedAt = yield* DateTime.now;
-      const nativeTurnId = `${child.sessionId}:turn:${subagent.turns}`;
-      const rootNodeId = idAllocator.derive.nodeFromProviderItem({
-        driver,
-        nativeItemId: `${nativeTurnId}:root`,
-      });
-      const providerTurn: OrchestrationV2ProviderTurn = {
-        id: idAllocator.derive.providerTurn({ driver, nativeTurnId }),
-        providerThreadId: child.providerThread.id,
-        nodeId: rootNodeId,
-        runAttemptId: null,
-        nativeTurnRef: ref(nativeTurnId, "weak"),
-        ordinal: subagent.turns,
-        status: "running",
-        startedAt,
-        completedAt: null,
-      };
-      const turn = makeTurn(
-        {
-          appThread: subagent.appThread,
-          threadId: subagent.appThread.id,
-          runId: null,
-          runOrdinal: subagent.call.turn.input.runOrdinal,
-          rootNodeId,
-          modelSelection: subagent.appThread.modelSelection,
-          runtimePolicy: subagent.call.turn.input.runtimePolicy,
-        },
-        providerTurn,
-        { scope: `${child.sessionId}:`, awaitingStart: false },
-      );
-      turn.before = subagent.queued;
-      subagent.queued = undefined;
-      child.active = turn;
-      child.sessionScopedBackground = false;
-      yield* emit({
-        type: "node.updated",
-        driver,
-        node: {
-          id: rootNodeId,
-          threadId: turn.input.threadId,
-          runId: null,
-          parentNodeId: null,
-          rootNodeId,
-          kind: "root_turn",
-          status: "running",
-          countsForRun: false,
-          providerThreadId: child.providerThread.id,
-          providerTurnId: providerTurn.id,
-          nativeItemRef: ref(nativeTurnId, "weak"),
-          runtimeRequestId: null,
-          checkpointScopeId: null,
-          startedAt,
-          completedAt: null,
-        },
-      });
-      yield* emitProviderTurn(turn, providerTurn);
-      const prompt = subagent.prompt;
-      subagent.prompt = undefined;
-      if (prompt !== undefined && prompt.length > 0) {
-        const nativeId = `${nativeTurnId}:prompt`;
-        const artifacts = makeSubagentConversationArtifacts({
-          messageId: idAllocator.derive.messageFromProviderItem({ driver, nativeItemId: nativeId }),
-          senderThreadId: subagent.call.turn.input.threadId,
-          turnItemId: idAllocator.derive.turnItemFromProviderItem({
-            driver,
-            nativeItemId: nativeId,
-          }),
-          threadId: turn.input.threadId,
-          rootNodeId,
-          providerThreadId: child.providerThread.id,
-          providerTurnId: providerTurn.id,
-          nativeItemRef: ref(nativeId, "weak"),
-          role: "user",
-          text: prompt,
-          ordinal: ordinalOf(turn, nativeId),
-          now: startedAt,
+    const startChildTurn = bindStartChildTurn({
+          get callsAttachedTo() {
+            return callsAttachedTo;
+          },
+          get child() {
+            return child;
+          },
+          get completedAt() {
+            return completedAt;
+          },
+          get driver() {
+            return driver;
+          },
+          get emit() {
+            return emit;
+          },
+          get emitProviderTurn() {
+            return emitProviderTurn;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get makeTurn() {
+            return makeTurn;
+          },
+          get message() {
+            return message;
+          },
+          get messageId() {
+            return messageId;
+          },
+          get modelSelection() {
+            return modelSelection;
+          },
+          get nodeId() {
+            return nodeId;
+          },
+          get now() {
+            return now;
+          },
+          get ordinalOf() {
+            return ordinalOf;
+          },
+          get ref() {
+            return ref;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get status() {
+            return status;
+          },
+          get text() {
+            return text;
+          },
+          get turnItem() {
+            return turnItem;
+          }
         });
-        yield* emit({ type: "message.updated", driver, message: artifacts.message });
-        yield* emit({ type: "turn_item.updated", driver, turnItem: artifacts.turnItem });
-      }
-    });
 
     const offerWake = Effect.fnUntraced(function* (state: ThreadState, wake: Wake) {
       const route = state.providerThread.appThreadId;
@@ -2399,155 +2353,140 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
-    const finishTurn = Effect.fnUntraced(function* (
-      state: ThreadState,
-      terminal: TurnTerminal,
-      threadDisposition: "reusable" | "broken" = "reusable",
-    ) {
-      const turn = state.active;
-      if (turn === undefined) return;
-      const promptDropped = terminal.status === "interrupted" && turn.unsent;
-      state.active = undefined;
-      for (const inboxID of turn.steers) state.strandedSteers.add(inboxID);
-      for (const entry of pending.values()) {
-        const background = callsAbove(entry.sessionId).some((call) => call.background);
-        if (
-          entry.sessionId === state.sessionId ||
-          (entry.turn === turn && !(background && terminal.status !== "failed"))
-        ) {
-          yield* settleRequest(entry, "cancelled");
-        }
-      }
-      const completedAt = yield* DateTime.now;
-      for (const open of turn.texts.values()) {
-        yield* emitText(state, turn, open.block, open.kind, (text) => text, true);
-      }
-      for (const id of turn.tools.keys()) {
-        if ([...state.imageJobs.values()].some((job) => job.turn === turn && job.toolId === id))
-          continue;
-        yield* emitTool(
-          state,
-          turn,
-          id,
-          terminal.status === "completed" ? "completed" : "interrupted",
-        );
-      }
-      for (const call of Array.from(state.calls.values())) {
-        if (call.turn !== turn) continue;
-        if (call.background && terminal.status !== "failed") continue;
-        yield* settleCall(call, terminal.status === "completed" ? "completed" : terminal.status);
-      }
-      if (state.subagent !== undefined) {
-        yield* emit({
-          type: "node.updated",
-          driver,
-          node: {
-            id: turn.input.rootNodeId,
-            threadId: turn.input.threadId,
-            runId: null,
-            parentNodeId: null,
-            rootNodeId: turn.input.rootNodeId,
-            kind: "root_turn",
-            status: terminal.status,
-            countsForRun: false,
-            providerThreadId: state.providerThread.id,
-            providerTurnId: turn.providerTurn.id,
-            nativeItemRef: turn.providerTurn.nativeTurnRef,
-            runtimeRequestId: null,
-            checkpointScopeId: null,
-            startedAt: turn.providerTurn.startedAt,
-            completedAt,
+    const finishTurn = bindFinishTurn({
+          get answer() {
+            return answer;
           },
-        });
-      }
-      yield* emitCompaction(state, turn, terminal.status === "failed" ? "failed" : "interrupted");
-      yield* emitRetry(
-        state,
-        turn,
-        terminal.status,
-        terminal.status === "failed" ? terminal.failure : undefined,
-      );
-      const window = windowOf(turn.input.runtimePolicy.cwd, turn.input.modelSelection.model);
-      const lastStep = turn.lastStep;
-      yield* emitProviderTurn(turn, {
-        ...turn.providerTurn,
-        status: terminal.status,
-        completedAt,
-        ...(promptDropped ? { promptDropped: true } : {}),
-        turnTokenUsage: turnTokenUsage(turn, terminal.status),
-        ...(lastStep === undefined
-          ? {}
-          : {
-              tokenUsage: {
-                usedTokens:
-                  lastStep.input + lastStep.cache.read + lastStep.cache.write + lastStep.output,
-                maxTokens: window ?? null,
-                inputTokens: lastStep.input + lastStep.cache.read + lastStep.cache.write,
-                cachedInputTokens: lastStep.cache.read,
-                outputTokens: lastStep.output,
-                reasoningOutputTokens: lastStep.reasoning,
-                updatedAt: DateTime.formatIso(completedAt),
-              },
-            }),
-      });
-      // Subagent turns are runless; their calls own settlement.
-      if (state.subagent !== undefined) {
-        const call = state.subagent.call;
-        for (const attached of callsAttachedTo(state)) {
-          if (attached.run === state.subagent.turns) attached.answer = turn.answer;
-        }
-        if (!call.background && terminal.status !== "completed") {
-          yield* settleCall(call, terminal.status);
-        }
-        if (terminal.status === "failed") {
-          // Background calls settle when the parent reads a report; failed children have no report.
-          // Fail every attached call so earlier background calls cannot leave phantom work,
-          // regardless of which call joined last or is still foreground.
-          for (const attached of callsAttachedTo(state)) {
-            yield* settleCall(attached, terminal.status, terminal.failure.message);
+          get calls() {
+            return calls;
+          },
+          get callsAbove() {
+            return callsAbove;
+          },
+          get callsAttachedTo() {
+            return callsAttachedTo;
+          },
+          get directoryOf() {
+            return directoryOf;
+          },
+          get driver() {
+            return driver;
+          },
+          get emit() {
+            return emit;
+          },
+          get emitCompaction() {
+            return emitCompaction;
+          },
+          get emitProviderThread() {
+            return emitProviderThread;
+          },
+          get emitProviderTurn() {
+            return emitProviderTurn;
+          },
+          get emitRetry() {
+            return emitRetry;
+          },
+          get emitText() {
+            return emitText;
+          },
+          get emitTool() {
+            return emitTool;
+          },
+          get events() {
+            return events;
+          },
+          get message() {
+            return message;
+          },
+          get model() {
+            return model;
+          },
+          get modelSelection() {
+            return modelSelection;
+          },
+          get models() {
+            return models;
+          },
+          get next() {
+            return next;
+          },
+          get now() {
+            return now;
+          },
+          get ordinalOf() {
+            return ordinalOf;
+          },
+          get output() {
+            return output;
+          },
+          get parent() {
+            return parent;
+          },
+          get pending() {
+            return pending;
+          },
+          get providerThread() {
+            return providerThread;
+          },
+          get providerThreadId() {
+            return providerThreadId;
+          },
+          get providerTurn() {
+            return providerTurn;
+          },
+          get retainedRequestsOf() {
+            return retainedRequestsOf;
+          },
+          get retry() {
+            return retry;
+          },
+          get rootNodeId() {
+            return rootNodeId;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get sessionScope() {
+            return sessionScope;
+          },
+          get setSessionStatus() {
+            return setSessionStatus;
+          },
+          get settleCall() {
+            return settleCall;
+          },
+          get startedAt() {
+            return startedAt;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get subagent() {
+            return subagent;
+          },
+          get text() {
+            return text;
+          },
+          get threads() {
+            return threads;
+          },
+          get turnTokenUsage() {
+            return turnTokenUsage;
+          },
+          get updatedAt() {
+            return updatedAt;
+          },
+          get values() {
+            return values;
+          },
+          get windowOf() {
+            return windowOf;
           }
-        }
-        return;
-      }
-      state.providerThread = {
-        ...state.providerThread,
-        status: threadDisposition === "broken" ? "error" : "idle",
-        updatedAt: completedAt,
-      };
-      yield* emitProviderThread(state);
-      const anyActive = [...threads.values()].some(
-        (candidate) => candidate.subagent === undefined && candidate.active !== undefined,
-      );
-      yield* setSessionStatus(pending.size > 0 ? "waiting" : anyActive ? "running" : "ready", null);
-      const base = {
-        type: "turn.terminal" as const,
-        driver,
-        // Native forks change thread IDs; terminal events must retain the recorded start identity.
-        providerThreadId: turn.providerTurn.providerThreadId,
-        providerTurnId: turn.providerTurn.id,
-        runOrdinal: turn.input.runOrdinal,
-        threadDisposition,
-        ...(promptDropped ? { promptDropped: true as const } : {}),
-        ...retainedRequestsOf(turn),
-      };
-      yield* emit(
-        terminal.status === "failed"
-          ? {
-              ...base,
-              status: "failed",
-              failure: terminal.failure,
-              failureItemOrdinal: ordinalOf(turn, `terminal-failure:${turn.providerTurn.id}`),
-              ...(turn.retry === undefined
-                ? {}
-                : { retry: turn.retry.retry, retryStartedAt: turn.retry.startedAt }),
-            }
-          : { ...base, status: terminal.status, failure: null },
-      );
-      // Cold servers list models lazily; refresh unknown windows off-stream for the next turn.
-      if (window === undefined) {
-        yield* Effect.forkIn(readModels(directoryOf(turn.input.runtimePolicy.cwd)), sessionScope);
-      }
-    });
+        });
 
     // OpenCode waits forever on unanswered requests; stop that run and keep its end from settling the next.
     const abandonRequest = Effect.fnUntraced(function* (state: ThreadState, reason: string) {
@@ -2898,203 +2837,143 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitSubagent(call);
     });
 
-    const onTurnEvent = Effect.fnUntraced(function* (
-      state: ThreadState,
-      turn: ActiveTurn,
-      event: OpenCode2Client.OpenCode2StreamEvent,
-    ) {
-      // OpenCode sends nothing when a retry goes through; the provider's first output marks it.
-      if (
-        turn.retry !== undefined &&
-        (event.type === "session.text.started" ||
-          event.type === "session.reasoning.started" ||
-          event.type === "session.tool.input.started")
-      ) {
-        yield* emitRetry(state, turn, "completed");
-        turn.retry = undefined;
-      }
-      switch (event.type) {
-        case "session.text.started":
-        case "session.reasoning.started":
-        case "session.text.delta":
-        case "session.reasoning.delta":
-        case "session.text.ended":
-        case "session.reasoning.ended": {
-          const data = event.data;
-          const kind = event.type.startsWith("session.text.") ? "text" : "reasoning";
-          return yield* emitText(state, turn, data, kind, (text) =>
-            "delta" in data ? text + data.delta : "text" in data ? data.text : text,
-          );
-        }
-        case "session.tool.input.started":
-          turn.closingText = undefined;
-          if (event.data.name === "question") return;
-          if (event.data.name === "subagent") return yield* startCall(state, turn, event.data.id);
-          turn.tools.set(event.data.id, { name: event.data.name, input: {} });
-          turn.startedAt.set(event.data.id, yield* DateTime.now);
-          return yield* emitTool(state, turn, event.data.id, "running");
-        case "session.tool.called": {
-          const call = state.calls.get(event.data.id);
-          if (call !== undefined) {
-            const { input } = event.data;
-            call.prompt = stringField(input, "prompt") ?? call.prompt;
-            call.title = stringField(input, "description") ?? call.title;
-            call.agent = stringField(input, "agent");
-            call.model = stringField(input, "model") ?? call.model;
-            call.background = input["background"] === true;
-            return yield* emitSubagent(call);
+    const onTurnEvent = bindOnTurnEvent({
+          get attachChild() {
+            return attachChild;
+          },
+          get background() {
+            return background;
+          },
+          get calls() {
+            return calls;
+          },
+          get claudeUsageLimit() {
+            return claudeUsageLimit;
+          },
+          get compaction() {
+            return compaction;
+          },
+          get emitCompaction() {
+            return emitCompaction;
+          },
+          get emitRetry() {
+            return emitRetry;
+          },
+          get emitShell() {
+            return emitShell;
+          },
+          get emitSubagent() {
+            return emitSubagent;
+          },
+          get emitText() {
+            return emitText;
+          },
+          get emitTool() {
+            return emitTool;
+          },
+          get id() {
+            return id;
+          },
+          get isUsageLimit() {
+            return isUsageLimit;
+          },
+          get lastStep() {
+            return lastStep;
+          },
+          get message() {
+            return message;
+          },
+          get model() {
+            return model;
+          },
+          get models() {
+            return models;
+          },
+          get name() {
+            return name;
+          },
+          get nativeId() {
+            return nativeId;
+          },
+          get now() {
+            return now;
+          },
+          get prompt() {
+            return prompt;
+          },
+          get providerTurn() {
+            return providerTurn;
+          },
+          get readShellOutput() {
+            return readShellOutput;
+          },
+          get replaying() {
+            return replaying;
+          },
+          get retry() {
+            return retry;
+          },
+          get session() {
+            return session;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get settleCall() {
+            return settleCall;
+          },
+          get shell() {
+            return shell;
+          },
+          get shellInfo() {
+            return shellInfo;
+          },
+          get shells() {
+            return shells;
+          },
+          get startCall() {
+            return startCall;
+          },
+          get startedAt() {
+            return startedAt;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get steps() {
+            return steps;
+          },
+          get stringField() {
+            return stringField;
+          },
+          get subagent() {
+            return subagent;
+          },
+          get subagentOutput() {
+            return subagentOutput;
+          },
+          get syncRosterAncestors() {
+            return syncRosterAncestors;
+          },
+          get text() {
+            return text;
+          },
+          get textOf() {
+            return textOf;
+          },
+          get turn() {
+            return turn;
+          },
+          get updateRetry() {
+            return updateRetry;
+          },
+          get values() {
+            return values;
           }
-          const tool = turn.tools.get(event.data.id);
-          if (tool !== undefined) tool.input = event.data.input;
-          return yield* emitTool(state, turn, event.data.id, "running");
-        }
-        case "session.tool.progress": {
-          const call = state.calls.get(event.data.id);
-          const childId = stringField(event.data.metadata, "sessionID");
-          if (call !== undefined && childId !== undefined) yield* attachChild(call, childId);
-          return;
-        }
-        case "session.tool.success": {
-          const call = state.calls.get(event.data.id);
-          if (call !== undefined) {
-            const childId = stringField(event.data.metadata, "sessionID");
-            if (childId !== undefined) yield* attachChild(call, childId);
-            // Background and joined-background calls return at launch; reports settle them.
-            if (event.data.metadata?.["status"] === "running") {
-              if (call.background) return;
-              call.background = true;
-              return yield* emitSubagent(call);
-            }
-            return yield* settleCall(call, "completed", subagentOutput(textOf(event.data.content)));
-          }
-          const shellId = stringField(event.data.metadata, "shellID");
-          const tool = turn.tools.get(event.data.id);
-          if (
-            shellId !== undefined &&
-            tool?.name === "shell" &&
-            event.data.metadata?.["exit"] === undefined &&
-            event.data.metadata?.["signal"] === undefined &&
-            event.data.metadata?.["timeout"] !== true
-          ) {
-            shells.set(shellId, {
-              state,
-              turn,
-              toolId: event.data.id,
-              tool,
-              command: stringField(tool.input, "command") ?? "Shell command",
-              ...(replaying?.awaited.has(shellId) === true ? { awaited: true } : {}),
-              running: true,
-              output: "",
-              cursor: 0,
-            });
-            const known = shellInfo.get(shellId);
-            const ended = replaying?.ended.get(shellId);
-            const tracked = shells.get(shellId)!;
-            tracked.running =
-              ended === undefined && (known === undefined || known.status === "running");
-            yield* readShellOutput(shellId, !tracked.running).pipe(Effect.ignore({ log: true }));
-            yield* emitShell(
-              shellId,
-              tracked.running
-                ? "running"
-                : (ended?.status ??
-                    (known?.status === "killed"
-                      ? "interrupted"
-                      : known?.exit === 0
-                        ? "completed"
-                        : "failed")),
-              ended?.exit ?? known?.exit,
-            );
-            if (ended !== undefined) shells.delete(shellId);
-            yield* syncRosterAncestors(state);
-            return;
-          }
-          if (shellId !== undefined) shellInfo.delete(shellId);
-          const output = textOf(event.data.content);
-          yield* emitTool(state, turn, event.data.id, "completed", {
-            output,
-            files: event.data.content.flatMap((part) => (part.type === "file" ? [part] : [])),
-            metadata: event.data.metadata,
-          });
-          if (
-            ![...state.imageJobs.values()].some(
-              (job) => job.turn === turn && job.toolId === event.data.id,
-            )
-          )
-            turn.tools.delete(event.data.id);
-          return;
-        }
-        case "session.tool.failed": {
-          const aborted = event.data.error.type === "aborted";
-          const call = state.calls.get(event.data.id);
-          if (call !== undefined) {
-            return yield* settleCall(
-              call,
-              aborted ? "interrupted" : "failed",
-              event.data.error.message,
-            );
-          }
-          yield* emitTool(state, turn, event.data.id, aborted ? "interrupted" : "failed", {
-            output: event.data.error.message,
-            metadata: event.data.metadata,
-          });
-          turn.tools.delete(event.data.id);
-          return;
-        }
-        case "session.compaction.started":
-          turn.compaction = {
-            nativeId: `${turn.providerTurn.id}:compaction:${turn.compactions++}`,
-            startedAt: yield* DateTime.now,
-          };
-          return yield* emitCompaction(state, turn, "running");
-        case "session.compaction.ended":
-          return yield* emitCompaction(state, turn, "completed", event.data.text);
-        case "session.compaction.failed":
-          return yield* emitCompaction(state, turn, "failed");
-        case "session.step.started":
-          turn.startedSteps += 1;
-          turn.models.add(`${event.data.model.providerID}/${event.data.model.id}`);
-          return;
-        case "session.step.ended":
-        case "session.step.failed": {
-          const tokens = event.data.tokens;
-          if (tokens === undefined) return;
-          turn.steps += 1;
-          turn.lastStep = tokens;
-          turn.usage.input += tokens.input + tokens.cache.read + tokens.cache.write;
-          turn.usage.cached += tokens.cache.read;
-          turn.usage.cacheWrite += tokens.cache.write;
-          turn.usage.output += tokens.output + tokens.reasoning;
-          turn.usage.reasoning += tokens.reasoning;
-          return;
-        }
-        case "session.retry.scheduled":
-          return yield* updateRetry(state, turn, event.data, event.data.at - event.created);
-        case "session.execution.started":
-          turn.heldEnd = undefined;
-          return;
-        case "session.execution.succeeded":
-          return yield* endExecution(state, turn, {
-            status: turn.interrupted ? "interrupted" : "completed",
-          });
-        case "session.execution.interrupted":
-          return yield* endExecution(state, turn, { status: "interrupted" });
-        case "session.execution.failed": {
-          const { type, message, status, response } = event.data.error;
-          return yield* endExecution(state, turn, {
-            status: "failed",
-            failure: makeProviderFailure({
-              message: readableProviderErrorMessage(message, status, response?.body),
-              code: type,
-              class: isUsageLimit(event.data.error) ? "usage_limit" : "provider_error",
-              resetAt: claudeUsageLimit(message)?.resetAt ?? null,
-            }),
-          });
-        }
-        default:
-          return;
-      }
-    });
+        });
 
     const takeReports = Effect.fnUntraced(function* (state: ThreadState) {
       const delivered = [...state.reports.values()];
@@ -3395,255 +3274,239 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     });
 
-    const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
-      if (event.type === "shell.created") {
-        const sessionId = stringField(event.data.info.metadata, "sessionID");
-        if (sessionId !== undefined && ownerOf(sessionId) !== undefined) {
-          shellInfo.set(event.data.info.id, event.data.info);
-          if (shellInfo.size > 128) shellInfo.delete(shellInfo.keys().next().value!);
-        }
-        return;
-      }
-      if (event.type === "shell.exited" || event.type === "shell.deleted") {
-        const known = shellInfo.get(event.data.id);
-        if (known !== undefined)
-          shellInfo.set(event.data.id, {
-            ...known,
-            status: event.type === "shell.deleted" ? "killed" : event.data.status,
-            exit: "exit" in event.data ? event.data.exit : undefined,
-          });
-        const shell = shells.get(event.data.id);
-        if (shell === undefined || !shell.running || shell.stopping === true) return;
-        if (event.type === "shell.exited")
-          yield* readShellOutput(event.data.id, true).pipe(Effect.ignore({ log: true }));
-        shell.running = false;
-        yield* emitShell(
-          event.data.id,
-          event.type === "shell.deleted" || event.data.status === "killed"
-            ? "interrupted"
-            : event.data.exit === 0
-              ? "completed"
-              : "failed",
-          "exit" in event.data ? event.data.exit : undefined,
-        );
-        shells.delete(event.data.id);
-        shellInfo.delete(event.data.id);
-        yield* syncRosterAncestors(shell.state);
-        return;
-      }
-      const sessionId = sessionOfEvent(event);
-      const cleared = sessionId === undefined ? undefined : clearing.get(sessionId);
-      if (cleared !== undefined) {
-        if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
-          return yield* Deferred.succeed(cleared, undefined);
-        }
-        if (
-          event.type === "session.execution.started" ||
-          event.type === "unreadable.execution.started"
-        ) {
-          return;
-        }
-      }
-      if (sessionId !== undefined) {
-        if (
-          event.type === "session.execution.started" ||
-          event.type === "unreadable.execution.started"
-        ) {
-          // Executions are serial: a second start proves the unsettled run lost its end.
-          const state = threads.get(sessionId);
-          if (state !== undefined) state.starts += 1;
-          if (state?.unsettled === true) {
-            if (state.unsettledStarted) state.unsettled = false;
-            else state.unsettledStarted = true;
+    const handleEvent = bindHandleEvent({
+          get announced() {
+            return announced;
+          },
+          get busy() {
+            return busy;
+          },
+          get childOwners() {
+            return childOwners;
+          },
+          get clearing() {
+            return clearing;
+          },
+          get data() {
+            return data;
+          },
+          get emitShell() {
+            return emitShell;
+          },
+          get events() {
+            return events;
+          },
+          get executionEnd() {
+            return executionEnd;
+          },
+          get exit() {
+            return exit;
+          },
+          get holderOf() {
+            return holderOf;
+          },
+          get id() {
+            return id;
+          },
+          get info() {
+            return info;
+          },
+          get lost() {
+            return lost;
+          },
+          get next() {
+            return next;
+          },
+          get ownerOf() {
+            return ownerOf;
+          },
+          get readShellOutput() {
+            return readShellOutput;
+          },
+          get route() {
+            return route;
+          },
+          get session() {
+            return session;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get sessionOfEvent() {
+            return sessionOfEvent;
+          },
+          get shellInfo() {
+            return shellInfo;
+          },
+          get shells() {
+            return shells;
+          },
+          get started() {
+            return started;
+          },
+          get status() {
+            return status;
+          },
+          get strays() {
+            return strays;
+          },
+          get stringField() {
+            return stringField;
+          },
+          get syncRosterAncestors() {
+            return syncRosterAncestors;
+          },
+          get threads() {
+            return threads;
+          },
+          get value() {
+            return value;
           }
-          busy.add(sessionId);
-        } else if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
-          busy.delete(sessionId);
-        }
-      }
-      if (event.type === "session.created" && event.data.parentID !== undefined) {
-        const strayCaller = strays.get(event.data.parentID);
-        if (strayCaller !== undefined) {
-          strays.set(event.data.sessionID, strayCaller);
-          return;
-        }
-        const owner = ownerOf(event.data.parentID);
-        if (owner !== undefined) {
-          childOwners.set(event.data.sessionID, owner);
-          announced.set(event.data.sessionID, event.data);
-          holderOf(event.data.parentID)?.wakes.at(-1)?.children.add(event.data.sessionID);
-        }
-        return;
-      }
-      const holder = sessionId === undefined ? undefined : holderOf(sessionId);
-      const held = holder?.wakes.at(-1);
-      if (holder !== undefined && held !== undefined) {
-        held.events.push(event);
-        if (
-          sessionId === holder.sessionId &&
-          (event.type === "unreadable.execution.ended" || executionEnd(event.type))
-        ) {
-          held.running = false;
-        }
-        return;
-      }
-      return yield* route(event, sessionId);
-    });
+        });
 
-    const route = Effect.fnUntraced(function* (
-      event: OpenCode2Client.OpenCode2StreamEvent,
-      sessionId: string | undefined,
-      held = false,
-    ) {
-      const ended =
-        !held && (event.type === "unreadable.execution.ended" || executionEnd(event.type))
-          ? threads.get(sessionId ?? "")
-          : undefined;
-      if (ended?.unsettled === true) {
-        ended.unsettled = false;
-        return;
-      }
-      if (event.type === "unreadable.execution.started") {
-        const turn = threads.get(event.sessionID)?.active;
-        if (turn !== undefined) {
-          turn.awaitingStart = false;
-          turn.heldEnd = undefined;
-          return;
-        }
-      }
-      if (event.type === "unreadable.execution.ended") {
-        const state = threads.get(event.sessionID);
-        const turn = state?.active;
-        if (state === undefined || turn === undefined || turn.awaitingStart) return;
-        return yield* endExecution(
-          state,
-          turn,
-          event.executionType === "session.execution.succeeded"
-            ? { status: turn.interrupted ? "interrupted" : "completed" }
-            : event.executionType === "session.execution.interrupted"
-              ? { status: "interrupted" }
-              : {
-                  status: "failed",
-                  failure: makeProviderFailure({
-                    message: "OpenCode ended the turn with an error this version cannot read.",
-                    class: "provider_error",
-                  }),
-                },
-        );
-      }
-      if (event.type === "permission.asked") {
-        return yield* onAsked({ type: "permission", request: event.data });
-      }
-      if (event.type === "form.created")
-        return yield* onAsked({ type: "form", form: event.data.form });
-      if (
-        event.type === "permission.replied" ||
-        event.type === "form.replied" ||
-        event.type === "form.cancelled"
-      ) {
-        const nativeId = event.type === "permission.replied" ? event.data.requestID : event.data.id;
-        const entry = [...pending.values()].find((candidate) => candidate.native.id === nativeId);
-        if (entry === undefined || entry.answering) return;
-        const answered =
-          event.type === "form.replied" ||
-          (event.type === "permission.replied" && event.data.reply !== "reject");
-        return yield* settleRequest(entry, answered ? "resolved" : "cancelled");
-      }
-      if (sessionId === undefined) return;
-      const state = threads.get(sessionId);
-      if (state === undefined) return;
-      if (event.type === "rpc.opencode.goal.changed") {
-        if (!supportsNativeGoals()) return;
-        const goal = yield* decodeGoal(event.data["goal"]).pipe(Effect.result);
-        if (goal._tag === "Failure") {
-          yield* Effect.logWarning(
-            "Could not decode an OpenCode goal update; refreshing its state.",
-          );
-          return yield* refreshGoal(state);
-        }
-        yield* updateGoal(state, goal.success);
-        if (state.active !== undefined) yield* endIfSettled(state, state.active);
-        return;
-      }
-      if (event.type === "session.model.selected" || event.type === "session.step.started") {
-        if (event.type === "session.model.selected") state.model = event.data.model;
-        const providerThread = withReportedModel(state.providerThread, event.data.model);
-        if (providerThread !== state.providerThread) {
-          state.providerThread = { ...providerThread, updatedAt: yield* DateTime.now };
-          yield* emitProviderThread(state);
-        }
-      }
-      if (
-        event.type === "session.inbox.enqueued" &&
-        state.subagent !== undefined &&
-        state.active === undefined
-      ) {
-        state.subagent.queued ??= event.data.inboxID;
-      }
-      if (event.type === "session.inbox.enqueued" && event.data.item.type === "synthetic") {
-        return yield* onReport(state, event.data.inboxID, event.data.item.payload);
-      }
-      if (event.type === "session.inbox.cancelled" || event.type === "session.inbox.delivered") {
-        const report = state.reports.get(event.data.inboxID);
-        state.reports.delete(event.data.inboxID);
-        const external = state.externalPrompts.get(event.data.inboxID);
-        state.externalPrompts.delete(event.data.inboxID);
-        const turn = state.active;
-        if (turn !== undefined && turn.steers.delete(event.data.inboxID)) {
-          turn.settledInbox.add(event.data.inboxID);
-          if (event.type === "session.inbox.cancelled") yield* endIfSettled(state, turn);
-        } else if (
-          event.type === "session.inbox.delivered" &&
-          external !== undefined &&
-          turn !== undefined
-        ) {
-          yield* emitExternalPrompt(state, turn, event.data.inboxID, external.text);
-        } else if (
-          event.type === "session.inbox.delivered" &&
-          report !== undefined &&
-          turn !== undefined
-        ) {
-          yield* emitDeliveredReport(state, turn, event.data.inboxID, report.report);
-        }
-        return;
-      }
-      // No T3 turn existed while a wake held these, so its user items came from another client.
-      if (
-        event.type === "session.inbox.enqueued" &&
-        event.data.item.type === "user" &&
-        (state.active === undefined || (held && state.subagent === undefined))
-      ) {
-        const text = event.data.item.payload.text;
-        if (state.subagent !== undefined) state.subagent.prompt ??= text;
-        // T3's own prompts can be admitted after a failed submit ended their turn.
-        else if (!isOwnPrompt(event.data.inboxID)) {
-          state.externalPrompts.set(event.data.inboxID, {
-            text,
-            leads: !held && state.reports.size === 0,
-          });
-        }
-        return;
-      }
-      const started =
-        event.type === "session.execution.started" || event.type === "unreadable.execution.started";
-      if (state.subagent !== undefined && state.active === undefined && started) {
-        if ((yield* takeReports(state)).stopped) {
-          state.subagent.queued = undefined;
-          return;
-        }
-        return yield* startChildTurn(state);
-      }
-      const turn = state.active;
-      if (turn === undefined) {
-        if (started && state.subagent === undefined) return yield* onWake(state);
-        return;
-      }
-      if (turn.awaitingStart) {
-        if (event.type === "session.execution.started") turn.awaitingStart = false;
-        return;
-      }
-      return yield* onTurnEvent(state, turn, event);
-    });
+    const route = bindRoute({
+          get cancelled() {
+            return cancelled;
+          },
+          get client() {
+            return client;
+          },
+          get data() {
+            return data;
+          },
+          get decodeGoal() {
+            return decodeGoal;
+          },
+          get delivered() {
+            return delivered;
+          },
+          get emitDeliveredReport() {
+            return emitDeliveredReport;
+          },
+          get emitExternalPrompt() {
+            return emitExternalPrompt;
+          },
+          get emitProviderThread() {
+            return emitProviderThread;
+          },
+          get endExecution() {
+            return endExecution;
+          },
+          get endIfSettled() {
+            return endIfSettled;
+          },
+          get executionEnd() {
+            return executionEnd;
+          },
+          get form() {
+            return form;
+          },
+          get held() {
+            return held;
+          },
+          get id() {
+            return id;
+          },
+          get inboxID() {
+            return inboxID;
+          },
+          get isOwnPrompt() {
+            return isOwnPrompt;
+          },
+          get item() {
+            return item;
+          },
+          get message() {
+            return message;
+          },
+          get model() {
+            return model;
+          },
+          get now() {
+            return now;
+          },
+          get onAsked() {
+            return onAsked;
+          },
+          get onReport() {
+            return onReport;
+          },
+          get onTurnEvent() {
+            return onTurnEvent;
+          },
+          get onWake() {
+            return onWake;
+          },
+          get own() {
+            return own;
+          },
+          get pending() {
+            return pending;
+          },
+          get prompt() {
+            return prompt;
+          },
+          get refreshGoal() {
+            return refreshGoal;
+          },
+          get request() {
+            return request;
+          },
+          get result() {
+            return result;
+          },
+          get selected() {
+            return selected;
+          },
+          get session() {
+            return session;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get settleRequest() {
+            return settleRequest;
+          },
+          get startChildTurn() {
+            return startChildTurn;
+          },
+          get status() {
+            return status;
+          },
+          get stopped() {
+            return stopped;
+          },
+          get subagent() {
+            return subagent;
+          },
+          get supportsNativeGoals() {
+            return supportsNativeGoals;
+          },
+          get takeReports() {
+            return takeReports;
+          },
+          get threads() {
+            return threads;
+          },
+          get updateGoal() {
+            return updateGoal;
+          },
+          get updatedAt() {
+            return updatedAt;
+          },
+          get values() {
+            return values;
+          },
+          get wake() {
+            return wake;
+          },
+          get withReportedModel() {
+            return withReportedModel;
+          }
+        });
 
     // Terminal events are volatile; reconnects lose events and restarted servers cannot end lost executions.
     let streamFailure: string | undefined;
@@ -3668,113 +3531,86 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* setSessionStatus("error", message);
       yield* Queue.end(events);
     });
-    const backfill = Effect.fnUntraced(function* (sessionId: string, state: ThreadState) {
-      const turn = state.active;
-      if (turn === undefined) return undefined;
-      const promptId = promptOf(turn.providerTurn);
-      const { before } = turn;
-      if (promptId === undefined && before === undefined) return undefined;
-      const start = before !== undefined ? before : promptId;
-      const read = yield* OpenCode2Client.paginate(
-        { sessionID: Session.ID.make(sessionId), order: "desc" as const, limit: 50 },
-        client.message.list,
-      ).pipe(
-        Stream.takeUntil((message) => message.id === start),
-        Stream.runCollect,
-        Effect.catchTags({ SessionNotFoundError: () => Effect.succeed(null) }),
-      );
-      return yield* lock.withPermit(
-        Effect.gen(function* () {
-          if (state.active !== turn) return undefined;
-          if (read === null) return { outcome: "missing" as const };
-          // Without this turn's start in history, all retrieved turns are older.
-          const found = start === null || read.at(-1)?.id === start;
-          if (!found) return undefined;
-          const recent = before !== undefined && before !== null ? read.slice(0, -1) : read;
-          for (const message of recent) {
-            if (message.type === "user" && turn.steers.delete(message.id)) {
-              turn.settledInbox.add(message.id);
-            }
+    const backfill = bindBackfill({
+          get client() {
+            return client;
+          },
+          get emitRetry() {
+            return emitRetry;
+          },
+          get emitText() {
+            return emitText;
+          },
+          get emitTool() {
+            return emitTool;
+          },
+          get files() {
+            return files;
+          },
+          get id() {
+            return id;
+          },
+          get job() {
+            return job;
+          },
+          get known() {
+            return known;
+          },
+          get lock() {
+            return lock;
+          },
+          get make() {
+            return make;
+          },
+          get name() {
+            return name;
+          },
+          get now() {
+            return now;
+          },
+          get outcome() {
+            return outcome;
+          },
+          get output() {
+            return output;
+          },
+          get promptOf() {
+            return promptOf;
+          },
+          get providerTurn() {
+            return providerTurn;
+          },
+          get retry() {
+            return retry;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get startedAt() {
+            return startedAt;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get text() {
+            return text;
+          },
+          get textOf() {
+            return textOf;
+          },
+          get updateRetry() {
+            return updateRetry;
+          },
+          get values() {
+            return values;
           }
-          const idle = recent.find((message) => message.type === "idle");
-          const assistant = recent.find((message) => message.type === "assistant");
-          if (assistant?.retry !== undefined) {
-            // Snapshots omit when the retry was scheduled, so only its remaining delay is known.
-            yield* updateRetry(
-              state,
-              turn,
-              assistant.retry,
-              DateTime.toEpochMillis(assistant.retry.at) -
-                DateTime.toEpochMillis(yield* DateTime.now),
-            );
-          } else if (
-            turn.retry !== undefined &&
-            assistant !== undefined &&
-            assistant.error === undefined &&
-            assistant.content.length > 0
-          ) {
-            yield* emitRetry(state, turn, "completed");
-            turn.retry = undefined;
-          }
-          for (const message of recent.toReversed()) {
-            if (message.type !== "assistant" || state.active !== turn) continue;
-            const ordinals = { text: 0, reasoning: 0 };
-            for (const [index, part] of message.content.entries()) {
-              if (part.type === "text" || part.type === "reasoning") {
-                const block = { assistantMessageID: message.id, ordinal: ordinals[part.type]++ };
-                // OpenCode saves a block's text only when the block ends, so the last block of a
-                // response still streaming stays open and keeps the text that already arrived.
-                const open =
-                  message.time.streamed === undefined && index === message.content.length - 1;
-                yield* emitText(
-                  state,
-                  turn,
-                  block,
-                  part.type,
-                  (text) => (open && !part.text.startsWith(text) ? text : part.text),
-                  !open,
-                );
-                continue;
-              }
-              if (part.type !== "tool") continue;
-              turn.closingText = undefined;
-              if (!turn.tools.has(part.id)) {
-                turn.tools.set(part.id, { name: part.name, input: {} });
-                turn.startedAt.set(part.id, yield* DateTime.now);
-              }
-              const tool = turn.tools.get(part.id)!;
-              if (typeof part.state.input === "object" && part.state.input !== null) {
-                tool.input = part.state.input as Record<string, unknown>;
-              }
-              if (part.state.status === "completed") {
-                yield* emitTool(state, turn, part.id, "completed", {
-                  output: textOf(part.state.content),
-                  files: part.state.content.flatMap((content) =>
-                    content.type === "file" ? [content] : [],
-                  ),
-                  metadata: part.state.metadata,
-                });
-                if (
-                  ![...state.imageJobs.values()].some(
-                    (job) => job.turn === turn && job.toolId === part.id,
-                  )
-                )
-                  turn.tools.delete(part.id);
-              } else if (part.state.status === "error") {
-                yield* emitTool(state, turn, part.id, "failed", {
-                  output: part.state.error.message,
-                  metadata: part.state.metadata,
-                });
-                turn.tools.delete(part.id);
-              } else {
-                yield* emitTool(state, turn, part.id, "running");
-              }
-            }
-          }
-          return idle === undefined ? undefined : { outcome: idle.outcome };
-        }),
-      );
-    });
+        });
 
     // Restarts retain the previous session.outcome; without an idle item, the lost execution was interrupted.
     const recoverImages = Effect.fn("OpenCode2Adapter.recoverImages")(function* (
@@ -3807,131 +3643,107 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    const reconcile = Effect.fn("OpenCode2Adapter.reconcile")(function* () {
-      // Read deepest sessions first; subagent turns end before their waiting parents.
-      const running = [...threads]
-        .filter(([, state]) => state.active !== undefined)
-        .toSorted(([left], [right]) => callsAbove(right).length - callsAbove(left).length);
-      const background = [...threads.values()].filter(
-        (state) => state.subagent === undefined && hasBackground(state),
-      );
-      const marked = [...threads.values()].some((state) => state.unsettled);
-      if (
-        running.length === 0 &&
-        background.length === 0 &&
-        busy.size === 0 &&
-        !marked &&
-        strays.size === 0
-      ) {
-        return;
-      }
-      const active = { ...(yield* client.session.active()) };
-      for (const sessionId of busy) if (!(sessionId in active)) busy.delete(sessionId);
-      for (const state of threads.values()) {
-        if (state.unsettled && !(state.sessionId in active)) state.unsettledStarted = true;
-      }
-      for (const childId of strays.keys()) if (!(childId in active)) strays.delete(childId);
-      for (const [sessionId, state] of running) {
-        const turn = state.active;
-        if (turn === undefined) continue;
-        turn.missedEvents = true;
-        const ended = yield* backfill(sessionId, state);
-        if (ended?.outcome === "missing") {
-          delete active[Session.ID.make(sessionId)];
-          busy.delete(sessionId);
-        }
-        yield* lock.withPermit(
-          Effect.gen(function* () {
-            if (state.active !== turn) return;
-            if (sessionId in active) {
-              turn.heldEnd = undefined;
-              return;
-            }
-            if (ended?.outcome === "missing") {
-              return yield* finishTurn(state, { status: "interrupted" }, "broken");
-            }
-            const terminal: TurnTerminal =
-              ended?.outcome === "succeeded"
-                ? { status: turn.interrupted ? "interrupted" : "completed" }
-                : ended?.outcome === "failed"
-                  ? {
-                      status: "failed",
-                      failure: makeProviderFailure({
-                        message:
-                          "OpenCode ended the turn with an error while T3 Code was reconnecting.",
-                        class: "provider_error",
-                      }),
-                    }
-                  : { status: "interrupted" };
-            yield* endExecution(state, turn, terminal);
-          }),
-        );
-      }
-      for (const state of threads.values()) {
-        yield* lock
-          .withPermit(recoverImages(state).pipe(Effect.timeout(INVENTORY_TIMEOUT)))
-          .pipe(Effect.ignore({ log: true }));
-      }
-      yield* lock.withPermit(
-        Effect.gen(function* () {
-          for (const state of background) {
-            for (const call of runningCalls(state)) {
-              const child = call.child?.sessionId;
-              if (child === undefined || !(child in active)) {
-                yield* settleCall(call, "interrupted", LOST_BACKGROUND);
-              }
-            }
-            const sessions = sessionsOf(state);
-            for (const session of sessions) {
-              discardWakes(session, session.wakes.splice(0));
-              session.reports.clear();
-            }
-            for (const session of sessions.toReversed()) yield* syncRoster(session);
+    const reconcile = bindReconcile({
+          get INVENTORY_TIMEOUT() {
+            return INVENTORY_TIMEOUT;
+          },
+          get LOST_BACKGROUND() {
+            return LOST_BACKGROUND;
+          },
+          get backfill() {
+            return backfill;
+          },
+          get busy() {
+            return busy;
+          },
+          get callsAbove() {
+            return callsAbove;
+          },
+          get cancelled() {
+            return cancelled;
+          },
+          get client() {
+            return client;
+          },
+          get endExecution() {
+            return endExecution;
+          },
+          get failure() {
+            return failure;
+          },
+          get finishTurn() {
+            return finishTurn;
+          },
+          get hasBackground() {
+            return hasBackground;
+          },
+          get id() {
+            return id;
+          },
+          get lock() {
+            return lock;
+          },
+          get make() {
+            return make;
+          },
+          get message() {
+            return message;
+          },
+          get onAsked() {
+            return onAsked;
+          },
+          get outcome() {
+            return outcome;
+          },
+          get ownerOf() {
+            return ownerOf;
+          },
+          get pending() {
+            return pending;
+          },
+          get recoverImages() {
+            return recoverImages;
+          },
+          get requestTurn() {
+            return requestTurn;
+          },
+          get rootOf() {
+            return rootOf;
+          },
+          get runningCalls() {
+            return runningCalls;
+          },
+          get sessionScope() {
+            return sessionScope;
+          },
+          get sessionsOf() {
+            return sessionsOf;
+          },
+          get settleCall() {
+            return settleCall;
+          },
+          get settleRequest() {
+            return settleRequest;
+          },
+          get status() {
+            return status;
+          },
+          get strays() {
+            return strays;
+          },
+          get subagent() {
+            return subagent;
+          },
+          get syncRoster() {
+            return syncRoster;
+          },
+          get threads() {
+            return threads;
+          },
+          get values() {
+            return values;
           }
-          // Stopped off the lock this reconcile holds; one still running waits for a Stop.
-          for (const thread of new Set([...strays.values()].map(rootOf))) {
-            yield* Effect.forkIn(stopStrays(thread), sessionScope);
-          }
-        }),
-      );
-      const listed = new Map<string, Set<string>>();
-      for (const sessionId of Object.keys(active)) {
-        const owner = ownerOf(sessionId);
-        if (owner === undefined) continue;
-        const turn = requestTurn(sessionId)?.turn;
-        // Replies may settle during these reads; an older snapshot must not ask again.
-        const known = new Set([...pending.values()].map((entry) => entry.native.id));
-        const sessionID = Session.ID.make(sessionId);
-        const [permissions, forms] = yield* Effect.all([
-          client.permission.list({ sessionID }),
-          client.session.form.list({ sessionID }),
-        ]);
-        yield* lock.withPermit(
-          Effect.gen(function* () {
-            if (ownerOf(sessionId) !== owner || requestTurn(sessionId)?.turn !== turn) return;
-            listed.set(sessionId, new Set([...permissions, ...forms].map((request) => request.id)));
-            const shown = new Set([...pending.values()].map((entry) => entry.native.id));
-            for (const request of permissions) {
-              if (!shown.has(request.id) && !known.has(request.id))
-                yield* onAsked({ type: "permission", request });
-            }
-            for (const form of forms) {
-              if (!shown.has(form.id) && !known.has(form.id))
-                yield* onAsked({ type: "form", form });
-            }
-          }),
-        );
-      }
-      yield* lock.withPermit(
-        Effect.gen(function* () {
-          for (const entry of Array.from(pending.values())) {
-            if (listed.get(entry.sessionId)?.has(entry.native.id) !== true) {
-              yield* settleRequest(entry, "cancelled");
-            }
-          }
-        }),
-      );
-    });
+        });
 
     const reconnect = Effect.gen(function* () {
       // Release the borrow on every failure, including reconnect interruption, so spawned servers can idle-stop.
@@ -4443,82 +4255,92 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       ),
     );
 
-    const prepareTurn = Effect.fnUntraced(function* (
-      sessionId: string,
-      state: ThreadState,
-      turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-    ) {
-      const mcpSession = yield* mcpSessions.read(turnInput.threadId);
-      const directory = turnInput.runtimePolicy.cwd ?? host.paths.cwd;
-      const name = yield* mcpServerNameFor(turnInput.threadId);
-      // An external server may not reach T3's MCP endpoint, as with 1.x.
-      const wanted =
-        mcpSession === undefined || connection.external
-          ? undefined
-          : { name, directory, credential: mcpSession.authorizationHeader };
-      if (
-        state.mcp !== undefined &&
-        (wanted === undefined ||
-          state.mcp.directory !== wanted.directory ||
-          state.mcp.credential !== wanted.credential)
-      ) {
-        yield* removeMcp(state.mcp);
-        state.mcp = undefined;
-      }
-      // Idle Location eviction drops runtime MCP servers without clearing T3's cache.
-      // Re-adding an unchanged config keeps its existing connection.
-      let mcpAvailable = false;
-      if (wanted !== undefined) {
-        const fresh = state.mcp === undefined;
-        mcpAvailable = yield* client.mcp
-          .add({
-            server: name,
-            location: { directory },
-            config: new Mcp.RemoteConfig({
-              type: "remote",
-              url: mcpSession!.endpoint,
-              headers: { Authorization: wanted.credential },
-              oauth: false,
-            }),
-          })
-          .pipe(
-            Effect.timeout(INVENTORY_TIMEOUT),
-            Effect.as(true),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Could not add T3 Code's MCP server to OpenCode.", cause).pipe(
-                Effect.as(false),
-              ),
-            ),
-          );
-        if (mcpAvailable) state.mcp = wanted;
-        // Before 2.2.6, OpenCode loads a new server's tools 100 ms after it connects, and a prompt sent sooner lacks them.
-        if (mcpAvailable && fresh && compareSemverVersions(connection.version, "2.2.6") < 0) {
-          yield* Effect.sleep(MCP_TOOL_RELOAD_SETTLE);
-        }
-      }
-      const instructions = [
-        buildRuntimeInstructions({
-          agentFeedback: mcpAvailable ? (turnInput.agentFeedback ?? "off") : "off",
-          harness: "OpenCode",
-          model: turnInput.modelSelection.model,
-          runtimePolicy: turnInput.runtimePolicy,
-        }),
-        t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
-        mcpAvailable
-          ? "To wait for a background shell you started (tests, a build), call `t3_background_wait` with its shell ID before you end your turn. Do not mark work you leave running, or PRs."
-          : undefined,
-      ]
-        .filter((part) => part !== undefined && part.length > 0)
-        .join("\n\n");
-      if (instructions !== state.instructions) {
-        yield* client.session.instructions.entry.put({
-          sessionID: Session.ID.make(sessionId),
-          key: INSTRUCTIONS_KEY,
-          value: instructions,
+    const prepareTurn = bindPrepareTurn({
+          get INSTRUCTIONS_KEY() {
+            return INSTRUCTIONS_KEY;
+          },
+          get INVENTORY_TIMEOUT() {
+            return INVENTORY_TIMEOUT;
+          },
+          get MCP_TOOL_RELOAD_SETTLE() {
+            return MCP_TOOL_RELOAD_SETTLE;
+          },
+          get background() {
+            return background;
+          },
+          get call() {
+            return call;
+          },
+          get clearing() {
+            return clearing;
+          },
+          get client() {
+            return client;
+          },
+          get connection() {
+            return connection;
+          },
+          get entry() {
+            return entry;
+          },
+          get existing() {
+            return existing;
+          },
+          get host() {
+            return host;
+          },
+          get make() {
+            return make;
+          },
+          get mcpServerNameFor() {
+            return mcpServerNameFor;
+          },
+          get mcpSessions() {
+            return mcpSessions;
+          },
+          get model() {
+            return model;
+          },
+          get modelSelection() {
+            return modelSelection;
+          },
+          get paths() {
+            return paths;
+          },
+          get prompt() {
+            return prompt;
+          },
+          get removeMcp() {
+            return removeMcp;
+          },
+          get server() {
+            return server;
+          },
+          get session() {
+            return session;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get shell() {
+            return shell;
+          },
+          get started() {
+            return started;
+          },
+          get state() {
+            return state;
+          },
+          get turn() {
+            return turn;
+          },
+          get value() {
+            return value;
+          }
         });
-        state.instructions = instructions;
-      }
-    });
 
     const markBefore = (sessionId: string, before: string | null) =>
       Effect.sync(() => {
@@ -4659,79 +4481,101 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     });
 
-    const stopBackground = Effect.fnUntraced(function* (state: ThreadState) {
-      for (const [id, shell] of shells) {
-        if (shell.running && sessionsOf(state).includes(shell.state))
-          yield* lock.withPermit(stopShell(id)).pipe(Effect.ignore({ log: true }));
-      }
-      const calls = runningCalls(state).filter((call) => call.background);
-      const callers = sessionsOf(state);
-      // Ended subagent calls can run again to answer their own background reports.
-      const followUps = callers.filter(
-        (caller) =>
-          caller.subagent !== undefined &&
-          busy.has(caller.sessionId) &&
-          !isOrchestrationV2WorkActive(caller.subagent.call.status),
-      );
-      // Child sessions are announced before call progress names them; use announcements to stop unnamed children.
-      const announcedTo = (caller: ThreadState) =>
-        [...announced.values()].flatMap((info) =>
-          info.parentID === caller.sessionId ? [info.sessionID] : [],
-        );
-      const childrenOf = (call: SubagentCall) =>
-        call.child === undefined ? announcedTo(call.state) : [call.child.sessionId];
-      const children = new Map(
-        calls.flatMap((call) => childrenOf(call).map((childId) => [childId, call.state] as const)),
-      );
-      const unreached = new Set<string>();
-      for (const [childId, caller] of children) {
-        caller.stoppedChildren.add(childId);
-        const reached = yield* client.session
-          .interrupt({ sessionID: Session.ID.make(childId) })
-          .pipe(
-            Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
-            Effect.timeout(INTERRUPT_TIMEOUT),
-            Effect.tapCause((cause) =>
-              Effect.logWarning("Could not stop an OpenCode subagent.", cause),
-            ),
-            Effect.exit,
-            Effect.map(Exit.isSuccess),
-          );
-        if (!reached) unreached.add(childId);
-      }
-      for (const followUp of followUps) {
-        yield* client.session
-          .interrupt({ sessionID: Session.ID.make(followUp.sessionId) })
-          .pipe(
-            Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
-            Effect.timeout(INTERRUPT_TIMEOUT),
-            Effect.ignore({ log: true }),
-          );
-      }
-      yield* lock.withPermit(
-        Effect.gen(function* () {
-          for (const call of calls) {
-            if (childrenOf(call).some((childId) => unreached.has(childId))) continue;
-            yield* settleCall(call, "interrupted");
+    const stopBackground = bindStopBackground({
+          get INTERRUPT_TIMEOUT() {
+            return INTERRUPT_TIMEOUT;
+          },
+          get announced() {
+            return announced;
+          },
+          get answer() {
+            return answer;
+          },
+          get background() {
+            return background;
+          },
+          get busy() {
+            return busy;
+          },
+          get child() {
+            return child;
+          },
+          get childId() {
+            return childId;
+          },
+          get client() {
+            return client;
+          },
+          get discardWakes() {
+            return discardWakes;
+          },
+          get exit() {
+            return exit;
+          },
+          get id() {
+            return id;
+          },
+          get info() {
+            return info;
+          },
+          get lock() {
+            return lock;
+          },
+          get make() {
+            return make;
+          },
+          get markUnsettled() {
+            return markUnsettled;
+          },
+          get own() {
+            return own;
+          },
+          get runningCalls() {
+            return runningCalls;
+          },
+          get session() {
+            return session;
+          },
+          get sessionID() {
+            return sessionID;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get sessionsOf() {
+            return sessionsOf;
+          },
+          get settleCall() {
+            return settleCall;
+          },
+          get shell() {
+            return shell;
+          },
+          get shells() {
+            return shells;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get stopShell() {
+            return stopShell;
+          },
+          get stopStrays() {
+            return stopStrays;
+          },
+          get syncRosterAncestors() {
+            return syncRosterAncestors;
+          },
+          get values() {
+            return values;
+          },
+          get wake() {
+            return wake;
           }
-          for (const caller of callers) {
-            for (const report of caller.reports.values()) {
-              caller.stoppedChildren.add(report.childId);
-            }
-          }
-          const running = state.wakes.some((wake) => wake.running);
-          discardWakes(state, state.wakes.splice(0));
-          yield* syncRosterAncestors(state);
-          if (running) {
-            markUnsettled(state);
-            yield* client.session
-              .interrupt({ sessionID: Session.ID.make(state.sessionId) })
-              .pipe(Effect.timeout(INTERRUPT_TIMEOUT), Effect.ignore({ log: true }));
-          }
-        }),
-      );
-      yield* stopStrays(state);
-    });
+        });
 
     const listSkills = (location: { readonly directory: string }) =>
       client.skill.list({ location }).pipe(
@@ -4756,117 +4600,119 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return mentions.filter((name) => known.has(name));
     });
 
-    const submit = Effect.fnUntraced(function* (
-      sessionId: string,
-      turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-      state: ThreadState,
-      turn: ActiveTurn,
-    ) {
-      const sessionID = Session.ID.make(sessionId);
-      const sending = () => {
-        if (state.active !== turn || turn.interrupted) return false;
-        turn.unsent = false;
-        return true;
-      };
-      const finishControl = lock.withPermit(
-        Effect.suspend(() =>
-          state.active === turn ? finishTurn(state, { status: "completed" }) : Effect.void,
-        ),
-      );
-      const text = turnInput.message.text.trim();
-      const bare = turnInput.message.attachments.length === 0;
-      const id = turnPromptId(sessionId, turnInput.attemptId);
-      const goalCommand = supportsNativeGoals() ? parseGoalCommand(turnInput.message) : null;
-      if (goalCommand?.type === "show") {
-        if (!sending()) return;
-        yield* readGoal(state);
-        return yield* finishControl;
-      }
-      if (bare && text === "/compact") {
-        if (!sending()) return;
-        return yield* client.session.compact({ sessionID, id }).pipe(Effect.asVoid);
-      }
-      const location = { directory: turnInput.runtimePolicy.cwd ?? host.paths.cwd };
-      const command = bare ? commandOf(text) : undefined;
-      if (command !== undefined) {
-        const commands = yield* client.command.list({ location }).pipe(
-          Effect.timeout(INVENTORY_TIMEOUT),
-          Effect.map((list) => list.data),
-          Effect.orElseSucceed(() => []),
-        );
-        if (commands.some((entry) => entry.name === command.name)) {
-          // session.command neither accepts nor returns our ID; record the preceding history boundary.
-          const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
-          const before = newest.data[0]?.id ?? null;
-          yield* markBefore(sessionId, before);
-          if (!sending()) return;
-          if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
-            // OpenCode rejects pausing or clearing a missing goal; Codex treats that as a no-op.
-            yield* client.session.command({ sessionID, ...command }).pipe(
-              Effect.catchIf(
-                (error) =>
-                  error._tag === "CommandExecutionError" && error.message === "No goal is set.",
-                () => Effect.void,
-              ),
-            );
-            return yield* finishControl;
+    const submit = bindSubmit({
+          get ACTIVE_CHECK_TIMEOUT() {
+            return ACTIVE_CHECK_TIMEOUT;
+          },
+          get INVENTORY_TIMEOUT() {
+            return INVENTORY_TIMEOUT;
+          },
+          get busy() {
+            return busy;
+          },
+          get clearing() {
+            return clearing;
+          },
+          get client() {
+            return client;
+          },
+          get commandOf() {
+            return commandOf;
+          },
+          get data() {
+            return data;
+          },
+          get directory() {
+            return directory;
+          },
+          get endExecution() {
+            return endExecution;
+          },
+          get entry() {
+            return entry;
+          },
+          get events() {
+            return events;
+          },
+          get finishTurn() {
+            return finishTurn;
+          },
+          get goal() {
+            return goal;
+          },
+          get history() {
+            return history;
+          },
+          get host() {
+            return host;
+          },
+          get lock() {
+            return lock;
+          },
+          get make() {
+            return make;
+          },
+          get markBefore() {
+            return markBefore;
+          },
+          get message() {
+            return message;
+          },
+          get model() {
+            return model;
+          },
+          get name() {
+            return name;
+          },
+          get paths() {
+            return paths;
+          },
+          get prompt() {
+            return prompt;
+          },
+          get promptFiles() {
+            return promptFiles;
+          },
+          get promptText() {
+            return promptText;
+          },
+          get readGoal() {
+            return readGoal;
+          },
+          get session() {
+            return session;
+          },
+          get sessionId() {
+            return sessionId;
+          },
+          get skillsMentioned() {
+            return skillsMentioned;
+          },
+          get started() {
+            return started;
+          },
+          get starts() {
+            return starts;
+          },
+          get state() {
+            return state;
+          },
+          get status() {
+            return status;
+          },
+          get supportsNativeGoals() {
+            return supportsNativeGoals;
+          },
+          get turn() {
+            return turn;
+          },
+          get turnPromptId() {
+            return turnPromptId;
+          },
+          get value() {
+            return value;
           }
-          yield* client.session.command({ sessionID, ...command });
-          // A command that never prompts the model starts no execution, so no event ends its turn.
-          const idle = () => state.active === turn && !busy.has(sessionId);
-          if (!idle()) return;
-          const active = yield* client.session
-            .active()
-            .pipe(Effect.timeout(ACTIVE_CHECK_TIMEOUT), Effect.option);
-          if (active._tag === "None") {
-            return yield* Effect.logWarning("Could not check whether an OpenCode command started.");
-          }
-          if (sessionId in active.value) return;
-          // An execution that already ended left history behind; its events may still trail this reply.
-          const ran = yield* OpenCode2Client.paginate(
-            { sessionID, order: "desc" as const, limit: 1 },
-            client.message.list,
-          ).pipe(
-            Stream.takeWhile((message) => message.id !== before),
-            Stream.filter(
-              (message) =>
-                message.type === "user" || message.type === "assistant" || message.type === "idle",
-            ),
-            Stream.runHead,
-            Effect.timeout(ACTIVE_CHECK_TIMEOUT),
-            Effect.option,
-          );
-          if (ran._tag === "None") {
-            return yield* Effect.logWarning("Could not check whether an OpenCode command ran.");
-          }
-          if (ran.value._tag === "Some") return;
-          return yield* lock.withPermit(
-            Effect.suspend(() =>
-              idle()
-                ? endExecution(state, turn, {
-                    status: turn.interrupted ? "interrupted" : "completed",
-                  })
-                : Effect.void,
-            ),
-          );
-        }
-      }
-      const skills = yield* skillsMentioned(location, text);
-      const files = yield* promptFiles(turnInput.message.attachments);
-      const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
-      if (!sending()) return;
-      return yield* client.session
-        .prompt({
-          sessionID,
-          id,
-          text: messageText,
-          ...(files.length === 0 ? {} : { files }),
-          ...(skills.length === 0
-            ? {}
-            : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
-        })
-        .pipe(Effect.asVoid);
-    });
+        });
 
     const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
       instanceId,
