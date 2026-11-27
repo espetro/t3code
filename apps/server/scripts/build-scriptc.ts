@@ -17,56 +17,6 @@ const overlayPath = NodePath.join(serverDir, "tsconfig.scriptc.json");
 const nearestTsconfig = NodePath.join(srcDir, "tsconfig.json");
 const entry = NodePath.join(srcDir, "binScriptc.ts");
 const out = NodePath.join(serverDir, "dist", "t3");
-const repoRoot = NodePath.resolve(serverDir, "../..");
-const nocheckMarker = "// @ts-nocheck scriptc-native-overlay\n";
-const nocheckRoots = [
-  NodePath.join(repoRoot, "packages/effect-codex-app-server/src/_generated"),
-  NodePath.join(repoRoot, "packages/effect-acp/src/_generated"),
-  NodePath.join(repoRoot, "packages/contracts/src"),
-  NodePath.join(repoRoot, "packages/provider-acp/src"),
-  NodePath.join(repoRoot, "packages/provider-opencode/src"),
-  NodePath.join(repoRoot, "packages/provider-pi/src"),
-  srcDir,
-];
-
-const walkTsFiles = (dir: string, out: string[]) => {
-  if (!NodeFS.existsSync(dir)) return;
-  for (const entry of NodeFS.readdirSync(dir, { withFileTypes: true })) {
-    const full = NodePath.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "testkit" || entry.name === "node_modules") continue;
-      walkTsFiles(full, out);
-      continue;
-    }
-    if (!entry.name.endsWith(".ts") || entry.name.includes(".test.")) continue;
-    out.push(full);
-  }
-};
-
-const applyNocheckOverlay = () => {
-  const patched: string[] = [];
-  const files: string[] = [];
-  for (const root of nocheckRoots) walkTsFiles(root, files);
-  for (const file of files) {
-    const size = NodeFS.statSync(file).size;
-    const base = NodePath.basename(file);
-    if (size < 80_000 && !base.includes("schema.gen")) continue;
-    const text = NodeFS.readFileSync(file, "utf8");
-    if (text.startsWith(nocheckMarker)) continue;
-    NodeFS.writeFileSync(file, nocheckMarker + text);
-    patched.push(file);
-  }
-  return patched;
-};
-
-const revertNocheckOverlay = (patched: string[]) => {
-  for (const file of patched) {
-    const text = NodeFS.readFileSync(file, "utf8");
-    if (!text.startsWith(nocheckMarker)) continue;
-    NodeFS.writeFileSync(file, text.slice(nocheckMarker.length));
-  }
-};
-
 const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
   {
     from: NodePath.join(srcDir, "preview", "playwrightSidecar.ts"),
@@ -119,7 +69,6 @@ NodeFS.writeFileSync(
 );
 
 let exitCode = 0;
-const nocheckPatched = applyNocheckOverlay();
 try {
   const result = NodeChildProcess.spawnSync(
     "scriptc",
@@ -127,7 +76,7 @@ try {
       "build",
       entry,
       "--npm-static=effect",
-      `--optimization=${process.env.SCRIPTC_OPTIMIZATION ?? "dev"}`,
+      `--optimization=${process.env.SCRIPTC_OPTIMIZATION ?? "release"}`,
       "-o",
       out,
     ],
@@ -141,6 +90,10 @@ try {
         SCRIPTC_CHECKER: "tsgo",
         SCRIPTC_CHECKER_SERVER: "0",
         GOMAXPROCS: process.env.GOMAXPROCS ?? "1",
+        // tsgo (Go) otherwise grows past this VM's 15 GiB cgroup and the
+        // OOM killer SIGKILLs scriptc (anon-rss ~5.5 GiB, total-vm ~28 GiB).
+        GOMEMLIMIT: process.env.GOMEMLIMIT ?? "5GiB",
+        GOGC: process.env.GOGC ?? "50",
       },
     },
   );
@@ -167,7 +120,6 @@ try {
     }
   }
 } finally {
-  revertNocheckOverlay(nocheckPatched);
   try {
     NodeFS.unlinkSync(nearestTsconfig);
   } catch {
