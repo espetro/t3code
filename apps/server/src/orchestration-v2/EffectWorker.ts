@@ -33,8 +33,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
-
-const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
+import { taggedError } from "./scriptcBindScope.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -44,8 +43,6 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-const isOrchestrationEffectExecutionError = Schema.is(OrchestrationEffectExecutionError);
 
 /**
  * Do not apply this to `provider-turn.restart`: that compound effect also runs
@@ -73,8 +70,8 @@ const cannotSettleRun = (cause: Cause.Cause<unknown>) =>
   Cause.findErrorOption(cause).pipe(
     Option.exists(
       (error) =>
-        isOrchestrationEffectExecutionError(error) &&
-        ProviderTurnStartService.isProviderTurnStartRunStateMissingError(error.cause),
+        taggedError(error, "OrchestrationEffectExecutionError") &&
+        ProviderTurnStartService.isProviderTurnStartRunStateMissingError(Reflect.get(error, "cause")),
     ),
   );
 
@@ -365,8 +362,9 @@ export const layerExecutor: Layer.Layer<
                 Effect.catch((error) =>
                   Effect.gen(function* () {
                     if (
-                      !isProviderTurnControlError(error) ||
-                      (!error.turnCompleted && !error.steerDeclined) ||
+                      !taggedError(error, "ProviderTurnControlError") ||
+                      (Reflect.get(error, "turnCompleted") !== true &&
+                        Reflect.get(error, "steerDeclined") !== true) ||
                       effect.request.type !== "provider-turn.steer"
                     ) {
                       return yield* error;
@@ -766,7 +764,6 @@ export class OrchestrationEffectWorkerError extends Schema.TaggedError<Orchestra
   },
 ) {}
 
-const isOrchestrationEffectWorkerError = Schema.is(OrchestrationEffectWorkerError);
 
 // Only the claiming worker settles its row, and a running row blocks every later effect on its
 // thread until the server restarts. onError masks interruption, so retries must restore it.
@@ -912,19 +909,26 @@ export const layerWithOptions = (
       const runOnce = Effect.fnUntraced(
         function* (filter: ClaimFilter = {}) {
           const claimExit = yield* Effect.exit(outbox.claimNext({ workerId, ...filter }));
-          yield* increment(orchestrationEffectClaimsTotal, {
-            result: Exit.isFailure(claimExit)
-              ? "error"
-              : Option.isNone(claimExit.value)
-                ? "empty"
-                : "claimed",
+          const claimOutcome = Exit.match(claimExit, {
+            onFailure: (cause) => ({ kind: "failure" as const, cause }),
+            onSuccess: (value) => ({
+              kind: "success" as const,
+              value: Option.getOrUndefined(value),
+            }),
           });
-          if (Exit.isFailure(claimExit)) return yield* Effect.failCause(claimExit.cause);
-          const claimed = claimExit.value;
-          if (Option.isNone(claimed)) {
+          yield* increment(orchestrationEffectClaimsTotal, {
+            result:
+              claimOutcome.kind === "failure"
+                ? "error"
+                : claimOutcome.value === undefined
+                  ? "empty"
+                  : "claimed",
+          });
+          if (claimOutcome.kind === "failure") return yield* Effect.failCause(claimOutcome.cause);
+          if (claimOutcome.value === undefined) {
             return false;
           }
-          const effect = claimed.value;
+          const effect = claimOutcome.value;
           // Arm cancellation before rereading durable state to close the read-to-registration race.
           const cancellation = outbox
             .awaitCancellation(effect.id)
@@ -957,10 +961,14 @@ export const layerWithOptions = (
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );
-          if (Exit.isSuccess(exit) && exit.value === "cancelled") {
+          const raceResult = Exit.match(exit, {
+            onFailure: () => undefined,
+            onSuccess: (value) => value,
+          });
+          if (raceResult === "cancelled") {
             return true;
           }
-          if (Exit.isSuccess(exit)) {
+          if (raceResult !== undefined) {
             return yield* Effect.gen(function* () {
               const completed = yield* outbox.succeed({ effectId: effect.id, workerId });
               if (!completed) {
@@ -1013,10 +1021,8 @@ export const layerWithOptions = (
         },
         (effect, _filter?: ClaimFilter) =>
           effect.pipe(
-            Effect.mapError((cause) =>
-              isOrchestrationEffectWorkerError(cause)
-                ? cause
-                : new OrchestrationEffectWorkerError({ operation: "run", cause }),
+            Effect.mapError(
+              (cause) => new OrchestrationEffectWorkerError({ operation: "run", cause }),
             ),
           ),
       );

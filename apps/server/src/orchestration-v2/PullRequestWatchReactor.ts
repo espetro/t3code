@@ -41,7 +41,7 @@ import {
   type ProviderChangeRequestWatchFingerprint,
   PullRequestProviderError,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -467,7 +467,11 @@ export const make = Effect.gen(function* () {
         Effect.onExit((exit) =>
           Effect.sync(() => {
             // A retry must refresh every tail before advancing the shared remark watermark.
-            if (Exit.isFailure(exit) || exit.value === null) threadTails.delete(key);
+            const remarksPage = Exit.match(exit, {
+              onFailure: () => null,
+              onSuccess: (value) => value,
+            });
+            if (remarksPage === null) threadTails.delete(key);
           }),
         ),
       ),
@@ -689,7 +693,10 @@ export const make = Effect.gen(function* () {
       return yield* Effect.failCause(detailRead.cause);
     }
     readFailures.delete(group.key);
-    const detail = detailRead.value;
+    const detail = Exit.match(detailRead, {
+      onFailure: () => undefined as never,
+      onSuccess: (value) => value,
+    });
     for (const target of group.targets) {
       const life = lifeOf(target);
       const headSha = detail.headSha ?? life.headSha;
@@ -718,20 +725,23 @@ export const make = Effect.gen(function* () {
         );
       }
     }
-    const activity = Exit.isSuccess(activityRead)
-      ? activityRead.value
-      : Option.none<PullRequestActivity>();
+    const activity = Exit.match(activityRead, {
+      onFailure: () => Option.none<PullRequestActivity>(),
+      onSuccess: (value) => value,
+    });
+    const activityValue = Option.getOrUndefined(activity);
 
     // Never advance the remark watermark past comments an incomplete read could have missed.
-    const remarks = Option.isSome(activity)
-      ? yield* readRemarks(
-          group.key,
-          reference,
-          activity.value,
-          now,
-          fingerprint === null ? QUIET_REREAD_MS : FINGERPRINT_REREAD_MS,
-        )
-      : null;
+    const remarks =
+      activityValue === undefined
+        ? null
+        : yield* readRemarks(
+            group.key,
+            reference,
+            activityValue,
+            now,
+            fingerprint === null ? QUIET_REREAD_MS : FINGERPRINT_REREAD_MS,
+          );
     lastReads.set(group.key, {
       at:
         plan.activity || last === undefined

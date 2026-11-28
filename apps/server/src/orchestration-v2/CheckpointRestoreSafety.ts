@@ -191,8 +191,9 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
           ].filter((value): value is string => value !== null);
           if (otherThread.worktreePath === null) {
             const project = yield* projects.get(otherThread.projectId, { includeDeleted: true });
-            if (Option.isNone(project)) return false;
-            paths.push(project.value.workspaceRoot);
+            const projectRow = Option.getOrUndefined(project);
+            if (projectRow === undefined) return false;
+            paths.push(projectRow.workspaceRoot);
           }
           for (const candidate of paths) {
             if (checkedPaths.has(candidate)) continue;

@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import { chromium, type Browser, type BrowserContext, type BrowserType } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { playwrightSidecarDriverCandidates } from "./playwrightSidecarRpc.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
 const launches = vi.hoisted(() => ({
@@ -89,6 +90,33 @@ beforeEach(() => {
 });
 
 describe("ServerBrowserContexts", () => {
+  it("loads playwright through a Node sidecar when resolveSidecar is set", async () => {
+    const resolveSidecar = vi.fn(async () => {
+      throw new Error("sidecar launch");
+    });
+    const pool = new ServerBrowserContexts({ ...options(), resolveSidecar });
+    await expect(pool.contextFor("default", "agent")).rejects.toThrow("sidecar launch");
+    expect(resolveSidecar).toHaveBeenCalledOnce();
+    expect(launches.launch).not.toHaveBeenCalled();
+    await pool.close();
+  });
+
+  it("looks for the Playwright sidecar beside the native executable, then next to this module", () => {
+    expect(
+      playwrightSidecarDriverCandidates({
+        execDir: "/packaged",
+        moduleDir: "/repo/apps/server/src/preview",
+        source: true,
+        join: (...parts) => parts.join("/"),
+      }),
+    ).toEqual([
+      "/packaged/playwright-sidecar.mjs",
+      "/packaged/playwright-sidecar.js",
+      "/packaged/playwright-sidecar.ts",
+      "/repo/apps/server/src/preview/playwrightSidecar.ts",
+    ]);
+  });
+
   it("closes the shared browser only after it holds no context for the idle period", async () => {
     vi.useFakeTimers();
     try {

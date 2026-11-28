@@ -26,7 +26,7 @@ import * as Schema from "effect/Schema";
 
 import * as IssueService from "../issue/IssueService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
   normalizeThreadPullRequestKey,

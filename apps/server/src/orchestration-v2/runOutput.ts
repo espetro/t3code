@@ -78,24 +78,35 @@ export const checkOutput = Effect.fn("runOutput.checkOutput")(function* (
   json: string,
 ) {
   const parsed = Result.try(() => JSON.parse(json) as Schema.Json);
-  if (Result.isFailure(parsed)) {
+  const parsedJson = Result.match(parsed, {
+    onFailure: () => undefined,
+    onSuccess: (value) => value,
+  });
+  if (parsedJson === undefined) {
     return Result.fail<OutputRejection>({ problem: "`json` is not valid JSON text." });
   }
   const compiled = compile(schema);
-  if (Result.isFailure(compiled)) {
+  const outputSchema = Result.match(compiled, {
+    onFailure: () => undefined,
+    onSuccess: (value) => value,
+  });
+  if (outputSchema === undefined) {
     return Result.fail<OutputRejection>({
       problem: "The output schema is not a usable JSON Schema.",
     });
   }
-  const outputSchema = compiled.success;
-  const decoded = yield* Schema.decodeEffect(outputSchema)(parsed.success, {
+  const decoded = yield* Schema.decodeEffect(outputSchema)(parsedJson, {
     errors: "all",
     onExcessProperty: "error",
   }).pipe(Effect.result);
-  return Result.isFailure(decoded)
-    ? Result.fail<OutputRejection>({
+  const decodeFailure = Result.match(decoded, {
+    onFailure: (failure) => failure,
+    onSuccess: () => undefined,
+  });
+  return decodeFailure === undefined
+    ? Result.succeed(parsedJson)
+    : Result.fail<OutputRejection>({
         problem: "The result does not match the schema.",
-        cause: decoded.failure,
-      })
-    : Result.succeed(parsed.success);
+        cause: decodeFailure,
+      });
 });

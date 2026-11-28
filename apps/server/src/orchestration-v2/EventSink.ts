@@ -1,11 +1,5 @@
 import {
   CommandId,
-  type OrchestrationV2Run,
-  OrchestrationV2DomainEvent,
-  type OrchestrationV2ProviderThread,
-  type OrchestrationV2Subagent,
-  type OrchestrationV2TurnItem,
-  OrchestrationV2StoredEvent,
   ProviderThreadId,
   RunAttemptId,
   RunId,
@@ -13,7 +7,15 @@ import {
   NodeId,
   type ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import {
+  type OrchestrationV2Run,
+  OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
+  type OrchestrationV2TurnItem,
+  OrchestrationV2StoredEvent,
+} from "@t3tools/contracts/orchestrationV2";
 import * as ProviderCommitBatch from "./ProviderCommitBatch.ts";
 import * as ThreadViewers from "./ThreadViewers.ts";
 import * as Context from "effect/Context";
@@ -68,8 +70,7 @@ export class EventSinkStreamError extends Schema.TaggedError<EventSinkStreamErro
   }
 }
 
-export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
-export type EventSinkV2Error = typeof EventSinkV2Error.Type;
+export type EventSinkV2Error = EventSinkWriteError | EventSinkStreamError;
 
 interface ProviderBatchPublication {
   readonly publish: Array<Effect.Effect<void>>;
@@ -773,7 +774,8 @@ const layerBase: Layer.Layer<
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(function* (commandId: CommandId) {
         const existing = yield* commandReceipts.getByCommandId(commandId);
-        if (Option.isNone(existing)) {
+        const receipt = Option.getOrUndefined(existing);
+        if (receipt === undefined) {
           return yield* Effect.die(
             new Error(`Command receipt ${commandId} disappeared during its transaction.`),
           );
@@ -782,7 +784,7 @@ const layerBase: Layer.Layer<
           Stream.runCollect,
           Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),
         );
-        return { receipt: existing.value, storedEvents };
+        return { receipt, storedEvents };
       });
 
     const commitCommandEffect = Effect.fn("orchestrationV2.EventSink.commitCommand")(function* (
@@ -1141,11 +1143,7 @@ const layerBase: Layer.Layer<
     const coordinator = yield* ProviderCommitBatch.make(
       (work) =>
         withProviderBatch(work).pipe(
-          Effect.mapError((cause) =>
-            ProviderCommitBatch.isCommitBatchError(cause)
-              ? cause
-              : new ProviderCommitBatch.CommitBatchError({ cause }),
-          ),
+          Effect.mapError((cause) => new ProviderCommitBatch.CommitBatchError({ cause })),
         ),
       yield* ProviderCommitBatch.enabled,
       // Each snapshot owns a savepoint and its deferred publications within the shared commit.
@@ -1171,11 +1169,7 @@ const layerBase: Layer.Layer<
               }
             }),
           ),
-          Effect.mapError((cause) =>
-            ProviderCommitBatch.isCommitBatchError(cause)
-              ? cause
-              : new ProviderCommitBatch.CommitBatchError({ cause }),
-          ),
+          Effect.mapError((cause) => new ProviderCommitBatch.CommitBatchError({ cause })),
         );
       }),
       threadViewers.isViewed,

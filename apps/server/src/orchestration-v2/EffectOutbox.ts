@@ -217,8 +217,6 @@ export class EffectOutboxError extends Schema.TaggedError<EffectOutboxError>()(
   }
 }
 
-const isEffectOutboxError = Schema.is(EffectOutboxError);
-
 export interface EffectOutboxV2Shape {
   readonly awaitAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
@@ -477,11 +475,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         `.pipe(
           NodeSqliteClient.readOnly,
           Effect.flatMap((rows) => decodeRows("list", rows)),
-          Effect.mapError((cause) =>
-            isEffectOutboxError(cause)
-              ? cause
-              : new EffectOutboxError({ operation: "list", cause }),
-          ),
+          Effect.mapError((cause) => new EffectOutboxError({ operation: "list", cause })),
         ),
       firstSteer: (threadId, messageId) =>
         sql<EffectRow>`
@@ -496,11 +490,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           NodeSqliteClient.readOnly,
           Effect.flatMap((rows) => decodeRows("first-steer", rows)),
           Effect.map((effects) => Option.fromNullishOr(effects[0])),
-          Effect.mapError((cause) =>
-            isEffectOutboxError(cause)
-              ? cause
-              : new EffectOutboxError({ operation: "first-steer", cause }),
-          ),
+          Effect.mapError((cause) => new EffectOutboxError({ operation: "first-steer", cause })),
         ),
       cancelUnsettled: Effect.fn("EffectOutbox.cancelUnsettled")(
         function* ({ threadId, effectTypes, reason }) {
@@ -616,15 +606,19 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             const row = rows[0];
             if (row === undefined) return Option.none();
             const decoded = yield* Effect.result(rowToEffect(row));
-            if (Result.isSuccess(decoded)) {
+            const effect = Result.match(decoded, {
+              onFailure: (failure) => ({ failure }) as const,
+              onSuccess: (success) => ({ success }) as const,
+            });
+            if ("success" in effect) {
               cancellationSignals.set(row.effect_id, Deferred.makeUnsafe<void>());
-              return Option.some(decoded.success);
+              return Option.some(effect.success);
             }
             // Left running, an unreadable row would block every later effect on its thread.
             yield* Effect.logWarning("Failing an orchestration effect this build cannot decode", {
               effectId: row.effect_id,
               effectType: row.effect_type,
-              cause: decoded.failure,
+              cause: effect.failure,
             });
             yield* service.fail({
               effectId: row.effect_id,
@@ -633,9 +627,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             });
           }
         },
-        Effect.mapError((cause) =>
-          isEffectOutboxError(cause) ? cause : new EffectOutboxError({ operation: "claim", cause }),
-        ),
+        Effect.mapError((cause) => new EffectOutboxError({ operation: "claim", cause })),
       ),
       nextClaimableAt: Effect.fnUntraced(
         function* ({
@@ -648,20 +640,16 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
           const availableAt = rows[0]?.available_at;
           if (availableAt === undefined || availableAt === null) return Option.none();
-          const parsed = DateTime.make(availableAt);
-          if (Option.isNone(parsed)) {
+          const parsed = Option.getOrUndefined(DateTime.make(availableAt));
+          if (parsed === undefined) {
             return yield* new EffectOutboxError({
               operation: "next-claimable",
               cause: `Invalid available_at timestamp: ${availableAt}`,
             });
           }
-          return parsed;
+          return Option.some(parsed);
         },
-        Effect.mapError((cause) =>
-          isEffectOutboxError(cause)
-            ? cause
-            : new EffectOutboxError({ operation: "next-claimable", cause }),
-        ),
+        Effect.mapError((cause) => new EffectOutboxError({ operation: "next-claimable", cause })),
       ),
       succeed: Effect.fn("EffectOutbox.succeed")(
         function* ({ effectId, workerId }) {

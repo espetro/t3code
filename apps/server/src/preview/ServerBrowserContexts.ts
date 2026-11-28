@@ -8,11 +8,16 @@ import * as NodePath from "node:path";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import {
+  launchPlaywrightSidecar,
+  type PlaywrightSidecar,
+  type PlaywrightSidecarLaunch,
+} from "./playwrightSidecarRpc.ts";
 
-// Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
+// Playwright needs its files on disk. The specifier is built so a native compile does not pull it in.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
-const loadPlaywright = () =>
-  requirePlaywright("playwright-core") as typeof import("playwright-core");
+const loadPlaywrightInProcess = () =>
+  requirePlaywright(["playwright", "core"].join("-")) as typeof import("playwright-core");
 
 const BADGE_STUB = `if (typeof WorkerNavigator === "function") for (const name of ["setAppBadge", "clearAppBadge"]) WorkerNavigator.prototype[name] = () => Promise.resolve();`;
 
@@ -68,6 +73,8 @@ interface Options {
   /** Closes the shared browser once it has held no context for this long. */
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
+  /** Native servers spawn system Node to load playwright-core; unset keeps it in-process. */
+  readonly resolveSidecar?: () => Promise<PlaywrightSidecarLaunch>;
 }
 
 const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
@@ -141,9 +148,16 @@ export class ServerBrowserContexts {
   private closing: Promise<void> | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSharedContexts = 0;
+  private sidecar: Promise<PlaywrightSidecar> | undefined;
 
   constructor(options: Options) {
     this.options = options;
+  }
+
+  private async chromium() {
+    if (!this.options.resolveSidecar) return loadPlaywrightInProcess().chromium;
+    this.sidecar ??= this.options.resolveSidecar().then(launchPlaywrightSidecar);
+    return (await this.sidecar).chromium as (typeof import("playwright-core"))["chromium"];
   }
 
   private async launchOptions() {
@@ -183,11 +197,11 @@ export class ServerBrowserContexts {
   private sharedBrowser() {
     if (!this.browser) {
       const launched = this.launchOptions().then(async ({ executable, ...options }) => {
-        const { chromium } = loadPlaywright();
+        const chromium = await this.chromium();
         const browser = await this.launch(executable, (executablePath) =>
           chromium.launch({ ...options, executablePath }),
         );
-        stubWorkerBadges(browser);
+        await this.applyWorkerBadgeStub(browser);
         browser.on("disconnected", () => {
           if (this.browser === launched) this.browser = undefined;
         });
@@ -267,7 +281,7 @@ export class ServerBrowserContexts {
     const directory = this.profileDirectory(profileId);
     await NodeFSP.mkdir(directory, { recursive: true });
     const { executable, ...options } = await this.launchOptions();
-    const { chromium } = loadPlaywright();
+    const chromium = await this.chromium();
     const context = await this.launch(executable, (executablePath) =>
       chromium.launchPersistentContext(directory, {
         ...options,
@@ -275,7 +289,7 @@ export class ServerBrowserContexts {
         executablePath,
       }),
     );
-    stubWorkerBadges(context);
+    await this.applyWorkerBadgeStub(context);
     return context;
   }
 
@@ -301,7 +315,7 @@ export class ServerBrowserContexts {
   }
 
   async connectDesktopPage(endpoint: string) {
-    const { chromium } = loadPlaywright();
+    const chromium = await this.chromium();
     // Only a same-machine desktop backend gets the browser channel, so uploads can pass file paths.
     const browser = await chromium.connectOverCDP(endpoint, { isLocal: true, timeout: 15_000 });
     const page = browser.contexts().flatMap((context) => context.pages())[0];
@@ -339,6 +353,15 @@ export class ServerBrowserContexts {
     return this.closing;
   }
 
+  private async applyWorkerBadgeStub(client: Browser | BrowserContext) {
+    const sidecar = await this.sidecar;
+    if (sidecar) {
+      await sidecar.stubWorkerBadges(client);
+      return;
+    }
+    stubWorkerBadges(client);
+  }
+
   private async dispose() {
     clearTimeout(this.idleTimer);
     await Promise.allSettled(
@@ -347,5 +370,8 @@ export class ServerBrowserContexts {
     const browser = await this.browser?.catch(() => undefined);
     await browser?.close().catch(constVoid);
     this.contexts.clear();
+    const sidecar = await this.sidecar?.catch(() => undefined);
+    sidecar?.close();
+    this.sidecar = undefined;
   }
 }

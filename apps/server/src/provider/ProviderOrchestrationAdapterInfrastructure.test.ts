@@ -12,7 +12,10 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import { layerIdAllocator } from "./ProviderOrchestrationAdapterInfrastructure.ts";
+import {
+  cursorSdkWorkerLaunchFrom,
+  layerIdAllocator,
+} from "./ProviderOrchestrationAdapterInfrastructure.ts";
 
 it.effect("subagent threads stored under a legacy id keep it when re-derived", () =>
   Effect.gen(function* () {
@@ -77,3 +80,39 @@ it.live("spawns the __cursor-sdk-worker CLI fast path and shuts down cleanly on 
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("spawns system node with a worker file when the host is a native executable", () => {
+  assert.deepEqual(
+    cursorSdkWorkerLaunchFrom({
+      isExecutable: true,
+      hostCommand: "/packaged/t3",
+      hostEntry: "/packaged/bin.mjs",
+      nodePath: "/usr/bin/node",
+      workerPath: "/packaged/cursor-sdk-worker.mjs",
+    }),
+    { command: "/usr/bin/node", args: ["/packaged/cursor-sdk-worker.mjs"] },
+  );
+  assert.deepEqual(
+    cursorSdkWorkerLaunchFrom({
+      isExecutable: true,
+      hostCommand: "/packaged/t3",
+      hostEntry: "/packaged/bin.mjs",
+      nodePath: "/usr/bin/node",
+      workerPath: "/repo/apps/server/src/provider/cursorSdkWorker.ts",
+    }),
+    {
+      command: "/usr/bin/node",
+      args: ["--experimental-strip-types", "/repo/apps/server/src/provider/cursorSdkWorker.ts"],
+    },
+  );
+  assert.deepEqual(
+    cursorSdkWorkerLaunchFrom({
+      isExecutable: false,
+      hostCommand: "/runtime/node",
+      hostEntry: "/repo/apps/server/src/bin.ts",
+      nodePath: "/runtime/node",
+      workerPath: "/repo/apps/server/src/provider/cursorSdkWorker.ts",
+    }),
+    { command: "/runtime/node", args: ["/repo/apps/server/src/bin.ts", "__cursor-sdk-worker"] },
+  );
+});

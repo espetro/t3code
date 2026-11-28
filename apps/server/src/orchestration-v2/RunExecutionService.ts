@@ -40,7 +40,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as McpSessionRegistry from "#t3/mcp-session-registry";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -187,9 +187,7 @@ function isOpenExecutionNodeStatus(status: OrchestrationV2ExecutionNode["status"
   return status === "pending" || status === "running" || status === "waiting";
 }
 
-function isRunOwnedSubagentTerminalStatus(
-  status: ProviderTerminalEvent["status"],
-): status is RunOwnedSubagentTerminalStatus {
+function isRunOwnedSubagentTerminalStatus(status: ProviderTerminalEvent["status"]): boolean {
   return status === "interrupted" || status === "failed" || status === "cancelled";
 }
 
@@ -615,8 +613,6 @@ export class RunExecutionStartError extends Schema.TaggedError<RunExecutionStart
   }
 }
 
-const isProviderEventStreamError = Schema.is(ProviderAdapter.ProviderAdapterEventStreamError);
-
 export class RunExecutionIngestError extends Schema.TaggedError<RunExecutionIngestError>()(
   "RunExecutionIngestError",
   {
@@ -628,8 +624,6 @@ export class RunExecutionIngestError extends Schema.TaggedError<RunExecutionInge
     return `Failed while ingesting orchestration V2 run execution ${this.runId}.`;
   }
 }
-const isRunExecutionIngestError = Schema.is(RunExecutionIngestError);
-
 export const RunExecutionServiceV2Error = Schema.Union([
   RunExecutionStartError,
   RunExecutionIngestError,
@@ -836,7 +830,9 @@ export const layer: Layer.Layer<
           open.nodes.size > 0;
         const subagentTerminal = input.openRunOwnedSubagentsTerminal ?? input.terminal;
         const cascadedSubagentEvents =
-          isRunOwnedSubagentTerminalStatus(subagentTerminal.status) &&
+          (subagentTerminal.status === "interrupted" ||
+            subagentTerminal.status === "failed" ||
+            subagentTerminal.status === "cancelled") &&
           !childTurnsContinue(subagentTerminal) &&
           hasOpenSubagentProjection
             ? yield* cascadeTerminalizeRunOwnedSubagents({
@@ -2080,9 +2076,15 @@ export const layer: Layer.Layer<
                   // An exclusive session closes when its thread detaches, and no terminal
                   // follows. The process is gone, so a handoff settles here with no interrupt.
                   if (
-                    isRunExecutionIngestError(squashed) &&
-                    isProviderEventStreamError(squashed.cause) &&
-                    squashed.cause.detachedThreadId === input.run.threadId &&
+                    typeof squashed === "object" &&
+                    squashed !== null &&
+                    Reflect.get(squashed, "_tag") === "RunExecutionIngestError" &&
+                    typeof Reflect.get(squashed, "cause") === "object" &&
+                    Reflect.get(squashed, "cause") !== null &&
+                    Reflect.get(Reflect.get(squashed, "cause"), "_tag") ===
+                      "ProviderAdapterEventStreamError" &&
+                    Reflect.get(Reflect.get(squashed, "cause"), "detachedThreadId") ===
+                      input.run.threadId &&
                     (yield* workspaceHandedOff)
                   ) {
                     const handedOff = yield* finalizeRootRun(
@@ -2124,9 +2126,14 @@ export const layer: Layer.Layer<
                   // An adapter fails its stream when its runtime is gone. A failed write, or a session T3
                   // released or saw end, leaves work that can still report or that the releaser settles.
                   const runtimeLost =
-                    isRunExecutionIngestError(squashed) &&
-                    isProviderEventStreamError(squashed.cause) &&
-                    squashed.cause.raisedByT3 !== true;
+                    typeof squashed === "object" &&
+                    squashed !== null &&
+                    Reflect.get(squashed, "_tag") === "RunExecutionIngestError" &&
+                    typeof Reflect.get(squashed, "cause") === "object" &&
+                    Reflect.get(squashed, "cause") !== null &&
+                    Reflect.get(Reflect.get(squashed, "cause"), "_tag") ===
+                      "ProviderAdapterEventStreamError" &&
+                    Reflect.get(Reflect.get(squashed, "cause"), "raisedByT3") !== true;
                   if (yield* Ref.get(rootRunFinalized)) {
                     if (runtimeLost) yield* endWorkLostAfterRootRun(completedAt);
                     return;
@@ -2305,7 +2312,11 @@ export const layer: Layer.Layer<
           input.shouldStartProviderTurn === undefined
             ? Exit.succeed(true)
             : yield* Effect.exit(input.shouldStartProviderTurn());
-        if (Exit.isSuccess(shouldStart) && !shouldStart.value) {
+        const shouldStartAllowed = Exit.match(shouldStart, {
+          onFailure: () => undefined,
+          onSuccess: (value) => value,
+        });
+        if (shouldStartAllowed === false) {
           yield* Fiber.interrupt(providerEventFiber);
           return;
         }
@@ -2379,7 +2390,7 @@ export const layer: Layer.Layer<
                           terminal: makeFailedTerminalEvent(
                             makeProviderFailure({
                               cause: Cause.squash(cause),
-                              class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                              class: shouldStartAllowed === undefined ? "unknown" : "provider_error",
                             }),
                             latestItemOrdinal + 1,
                           ),

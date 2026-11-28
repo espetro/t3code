@@ -1244,7 +1244,7 @@ export const layer = Layer.effect(
       const runningScan = input.rescan
         ? (yield* Ref.get(workspaceRefreshesRef)).get(input.rescan)?.get(input.cwd)
         : undefined;
-      if (runningScan) yield* Deferred.await(runningScan);
+      if (runningScan !== undefined) yield* Deferred.await(runningScan);
       if (input.fresh) {
         yield* updateProviders((providers) =>
           providers.map((candidate) =>
@@ -1371,7 +1371,7 @@ export const layer = Layer.effect(
         }),
       );
       // Wait for the running scan: on-demand clients get its result only in this reply.
-      if ("inFlight" in claim) {
+      if ("inFlight" in claim && claim.inFlight !== undefined) {
         return yield* Deferred.await(claim.inFlight).pipe(Effect.andThen(Ref.get(providersRef)));
       }
       return yield* Fiber.join(claim.scan);

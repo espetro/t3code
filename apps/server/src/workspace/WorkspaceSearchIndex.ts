@@ -38,9 +38,59 @@ import { scoreSubsequenceMatch } from "@t3tools/shared/searchRanking";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { type IgnoreDecision, type IgnoreFile, parseIgnoreFile } from "./IgnorePatterns.ts";
 
-// fff-node's native library stays external; single-executables require disk packages instead of importing them.
+// fff-node's native library stays external; constructed so a native compile does not see the .node.
 const requireForFff = NodeModule.createRequire(import.meta.url);
-const { FileFinder } = requireForFff("@ff-labs/fff-node") as typeof import("@ff-labs/fff-node");
+type FileFinderStatic = {
+  create: (options: {
+    basePath: string;
+    disableMmapCache: boolean;
+    disableContentIndexing: boolean;
+    aiMode: boolean;
+  }) => Result<FileFinderType>;
+};
+let fileFinderClass: FileFinderStatic | null | undefined;
+
+function nativeFileFinder(): FileFinderStatic | undefined {
+  if (fileFinderClass !== undefined) return fileFinderClass ?? undefined;
+  try {
+    const id = ["@ff-labs", "fff-node"].join("/");
+    fileFinderClass = (requireForFff(id) as { FileFinder: FileFinderStatic }).FileFinder;
+  } catch {
+    fileFinderClass = null;
+  }
+  return fileFinderClass ?? undefined;
+}
+
+const emptyFinder = {
+  destroy() {},
+  waitForIndexReady: async () => ({ ok: true, value: true }),
+  getScanProgressAsync: async () => ({
+    ok: true,
+    value: { isScanning: false, isWarmupComplete: true },
+  }),
+  watchAsync: async () => ({ ok: true, value: () => undefined }),
+  scanFilesAsync: async () => ({ ok: true, value: undefined }),
+  fileSearchAsync: async () => ({
+    ok: true,
+    value: { items: [], scores: [], totalMatched: 0, totalFiles: 0 },
+  }),
+  directorySearchAsync: async () => ({ ok: true, value: { items: [] } }),
+  mixedSearchAsync: async () => ({
+    ok: true,
+    value: { items: [], totalMatched: 0 },
+  }),
+  grepAsync: async () => ({
+    ok: true,
+    value: {
+      items: [],
+      totalMatched: 0,
+      totalFilesSearched: 0,
+      totalFiles: 0,
+      filteredFileCount: 0,
+      nextCursor: null,
+    },
+  }),
+} as unknown as FileFinderType;
 
 // A glob intersects existing extension constraints; fff ORs bare `*.ext` constraints together.
 const IMAGE_SEARCH_CONSTRAINT = `**/*.{${PROJECT_FAVICON_EXTENSIONS.map((extension) =>
@@ -580,6 +630,21 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  if (yield* HostProcess.IsExecutable) {
+    yield* Effect.logWarning(
+      "Workspace search is using the degraded index because this native server cannot load fff-node.",
+      { cwd },
+    );
+    return emptyFinder;
+  }
+  const FileFinder = nativeFileFinder();
+  if (FileFinder === undefined) {
+    yield* Effect.logWarning(
+      "Workspace search is using the degraded index because fff-node is unavailable.",
+      { cwd },
+    );
+    return emptyFinder;
+  }
   const result = yield* Effect.try({
     try: () =>
       FileFinder.create({

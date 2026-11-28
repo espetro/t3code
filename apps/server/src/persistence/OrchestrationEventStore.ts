@@ -2,18 +2,22 @@ import {
   ApplicationEventMetadata,
   ApplicationProjectEvent,
   type ApplicationStoredEvent,
+} from "@t3tools/contracts/applicationEvent";
+import {
   CommandId,
   EventId,
   IsoDateTime,
-  isKnownOrchestrationV2EventType,
   NonNegativeInt,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts/baseSchemas";
+import {
+  isKnownOrchestrationV2EventType,
   OrchestrationV2DomainEventJson,
   OrchestrationV2StoredEvent,
-  ProjectId,
-  StoredProjectIcon,
-  ThreadId,
   type OrchestrationV2DomainEvent,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
+import { StoredProjectIcon } from "@t3tools/contracts/project";
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -181,8 +185,7 @@ interface ApplicationEventRow {
 
 const decodeV2EventJson = Schema.decodeUnknownEffect(OrchestrationV2DomainEventJson);
 const encodeV2EventJson = Schema.encodeEffect(OrchestrationV2DomainEventJson);
-const decodeV2StoredEvent = Schema.decodeUnknownEffect(OrchestrationV2StoredEvent);
-// decodeV2EventJson already validated the event; decoding it again here is the hot cost in replay.
+// Append only needs sequence/commandId. Replay still decodes the event in rowToV2StoredEvent.
 const decodeV2StoredEventHeader = Schema.decodeUnknownEffect(
   OrchestrationV2StoredEvent.mapFields(({ event: _event, ...fields }) => fields),
 );
@@ -259,12 +262,16 @@ function rowToApplicationStoredEvent(
   return row.aggregate_kind === "project" ? rowToProjectEvent(row) : rowToV2StoredEvent(row);
 }
 
-const isKnownProjectEventType = Schema.is(ProjectEventType);
+const knownProjectEventTypes = new Set<string>([
+  "project.created",
+  "project.meta-updated",
+  "project.deleted",
+]);
 
 const keepKnownEventTypeRow = (row: ApplicationEventRow) =>
   (
     row.aggregate_kind === "project"
-      ? isKnownProjectEventType(row.event_type)
+      ? knownProjectEventTypes.has(row.event_type)
       : isKnownOrchestrationV2EventType(row.event_type)
   )
     ? Effect.succeed(true)
@@ -295,10 +302,12 @@ function inferActorKind(event: UnsequencedProjectEvent): typeof ActorKind.Type {
 }
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): OrchestrationEventStoreError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
+  return (cause: unknown): OrchestrationEventStoreError => {
+    if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "SchemaError") {
+      return toPersistenceDecodeError(decodeOperation)(cause as Schema.SchemaError);
+    }
+    return toPersistenceSqlError(sqlOperation)(cause);
+  };
 }
 
 const makeEventStore = Effect.gen(function* () {
@@ -394,7 +403,8 @@ const makeEventStore = Effect.gen(function* () {
           : { ...event.payload, projectIcon: encodeProjectIcon(event.payload.projectIcon) },
       metadataJson: event.metadata,
     }).pipe(
-      Effect.flatMap((row) => decodeProjectEvent(row)),
+      // The process just encoded this row; sequence is the only new field.
+      Effect.map((row) => ({ ...event, sequence: row.sequence })),
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "OrchestrationEventStore.appendProjectEvent:insert",
@@ -539,11 +549,12 @@ const makeEventStore = Effect.gen(function* () {
               if (oldest !== undefined) promptHints.delete(oldest);
             }
           }
-          return yield* decodeV2StoredEvent({
-            sequence: rows[0]?.sequence,
+          // Self-produced: encode already ran. Re-decoding the event is the append hot path.
+          const { sequence, commandId } = yield* decodeV2StoredEventHeader({
+            sequence: row?.sequence,
             commandId: input.commandId ?? null,
-            event,
           });
+          return { sequence, commandId, event };
         }),
       { concurrency: 1 },
     ).pipe(

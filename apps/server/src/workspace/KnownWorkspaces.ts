@@ -12,7 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 
 export class UnknownWorkspaceError extends Schema.TaggedError<UnknownWorkspaceError>()(
@@ -86,7 +86,15 @@ export const make = Effect.gen(function* () {
       );
       if (managed.some(within)) return true;
 
-      const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
+      const projects = yield* projectStore.listShells().pipe(
+        Effect.orElseSucceed(
+          (): ReadonlyArray<{
+            readonly id: string;
+            readonly workspaceRoot: string;
+            readonly trackedFolders?: ReadonlyArray<{ readonly path: string }>;
+          }> => [],
+        ),
+      );
       for (const project of projects) {
         if (within(yield* resolveRoot(project.workspaceRoot))) return true;
       }
@@ -116,7 +124,9 @@ export const make = Effect.gen(function* () {
         if (project === undefined) return false;
         let listed = projectWorktrees.get(projectId);
         if (listed === undefined) {
-          listed = yield* git.listWorktreePaths(project.workspaceRoot).pipe(
+          const listWorktreePaths = git.listWorktreePaths;
+          if (typeof listWorktreePaths !== "function") return false;
+          listed = yield* listWorktreePaths(project.workspaceRoot).pipe(
             Effect.flatMap((paths) => Effect.forEach(paths, resolveRoot)),
             Effect.map((paths) => paths.filter((listedPath) => listedPath !== null)),
             Effect.orElseSucceed((): ReadonlyArray<string> => []),

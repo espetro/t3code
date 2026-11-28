@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
@@ -78,20 +78,30 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
   }
 }
 
-const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
-const isVcsProcessExitError = Schema.is(VcsProcessExitError);
-const isCheckpointRestoreError = Schema.is(CheckpointRestoreError);
-const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingError);
-
 /**
  * The message clients see when a rollback fails. Only a held Git index lock
  * gets its own explanation; other reasons carry internal ids or raw Git
  * output, so they fall back to the generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
-  if (isRuntimePolicyAboveCeilingError(error.cause)) return error.cause.message;
-  const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
-  return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
+  const cause = error.cause;
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    Reflect.get(cause, "_tag") === "RuntimePolicyAboveCeilingError"
+  ) {
+    return String(Reflect.get(cause, "message") ?? ROLLBACK_FAILED_MESSAGE);
+  }
+  const restoreCause =
+    typeof cause === "object" &&
+    cause !== null &&
+    Reflect.get(cause, "_tag") === "CheckpointRestoreError"
+      ? Reflect.get(cause, "cause")
+      : undefined;
+  return typeof restoreCause === "object" &&
+    restoreCause !== null &&
+    Reflect.get(restoreCause, "_tag") === "VcsProcessExitError" &&
+    Reflect.get(restoreCause, "detail") === GIT_INDEX_LOCKED_DETAIL
     ? GIT_INDEX_LOCKED_DETAIL
     : ROLLBACK_FAILED_MESSAGE;
 }
@@ -284,11 +294,12 @@ export const layer: Layer.Layer<
           (yield* isManagedWorktreePath(worktreePath))
         ) {
           const project = yield* projects.get(context.thread.projectId);
-          if (Option.isSome(project)) {
-            const recreate = gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot }).pipe(
+          const projectRow = Option.getOrUndefined(project);
+          if (projectRow !== undefined) {
+            const recreate = gitWorkflow.pruneWorktrees({ cwd: projectRow.workspaceRoot }).pipe(
               Effect.andThen(
                 gitWorkflow.createWorktree({
-                  cwd: project.value.workspaceRoot,
+                  cwd: projectRow.workspaceRoot,
                   refName: branch,
                   path: worktreePath,
                 }),
@@ -556,16 +567,15 @@ export const layer: Layer.Layer<
         },
         (effect, input) =>
           effect.pipe(
-            Effect.mapError((cause) =>
-              isCheckpointRollbackExecutionError(cause)
-                ? cause
-                : new CheckpointRollbackExecutionError({
-                    reason: "unexpected-failure",
-                    threadId: input.threadId,
-                    providerThreadId: input.providerThreadId,
-                    checkpointId: input.checkpointId,
-                    cause,
-                  }),
+            Effect.mapError(
+              (cause) =>
+                new CheckpointRollbackExecutionError({
+                  reason: "unexpected-failure",
+                  threadId: input.threadId,
+                  providerThreadId: input.providerThreadId,
+                  checkpointId: input.checkpointId,
+                  cause,
+                }),
             ),
           ),
       ),

@@ -57,8 +57,6 @@ export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRun
   }
 }
 
-const isProviderRuntimeRecoveryError = Schema.is(ProviderRuntimeRecoveryError);
-
 const MAX_RESENDS = 3;
 
 export interface ProviderRuntimeRecoverySummary {
@@ -1013,8 +1011,12 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-        if (Option.isSome(previous) && previous.value.request.type === "provider-runtime.continue")
-          processLossCount += previous.value.request.processLossCount ?? 0;
+        const previousEffect = Option.getOrUndefined(previous);
+        if (
+          previousEffect !== undefined &&
+          previousEffect.request.type === "provider-runtime.continue"
+        )
+          processLossCount += previousEffect.request.processLossCount ?? 0;
       }
       const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
         ? [
@@ -1144,10 +1146,8 @@ export const make = Effect.gen(function* () {
         }
       });
       yield* (grouped ? eventSink.withProviderBatch(reconcileGroup) : reconcileGroup).pipe(
-        Effect.mapError((cause) =>
-          isProviderRuntimeRecoveryError(cause)
-            ? cause
-            : new ProviderRuntimeRecoveryError({ operation: "reconcile", cause }),
+        Effect.mapError(
+          (cause) => new ProviderRuntimeRecoveryError({ operation: "reconcile", cause }),
         ),
       );
       // Eventless outbox cancellations also wait for the group's durable commit.

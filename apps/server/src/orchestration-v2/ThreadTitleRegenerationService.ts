@@ -29,6 +29,7 @@ import { forkInheritedRunOrdinals, ProjectionStoreThreadNotFoundError } from "./
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 import { formatThreadTitleContext } from "@t3tools/provider-core/server/threadTitleContext";
+import { taggedError } from "./scriptcBindScope.ts";
 export { formatThreadTitleContext } from "@t3tools/provider-core/server/threadTitleContext";
 
 export class ThreadTitleRegenerationService extends Context.Service<
@@ -56,13 +57,16 @@ type Outcome =
   | { readonly status: "failed"; readonly message: string };
 
 const MAX_FAILURE_MESSAGE_LENGTH = 300;
-const isTextGenerationError = Schema.is(TextGenerationError);
-const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 
 function failureMessage(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
-  const lines = isTextGenerationError(error)
-    ? error.detail
+  const detailRaw =
+    taggedError(error, "TextGenerationError") && typeof error === "object" && error !== null
+      ? Reflect.get(error, "detail")
+      : undefined;
+  const lines =
+    typeof detailRaw === "string"
+      ? detailRaw
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
@@ -166,8 +170,8 @@ const make = Effect.gen(function* () {
         return { status: "stale" as const };
       }
 
-      const project = yield* projects.get(projection.thread.projectId);
-      if (Option.isNone(project)) {
+      const project = Option.getOrUndefined(yield* projects.get(projection.thread.projectId));
+      if (project === undefined) {
         return { status: "failed" as const, message: "This thread's project no longer exists." };
       }
 
@@ -196,7 +200,7 @@ const make = Effect.gen(function* () {
       const inherited = yield* forkSource(projection.thread).pipe(
         Effect.catchTags({
           OrchestratorProjectionError: (error) =>
-            isProjectionStoreThreadNotFoundError(error.cause)
+            taggedError(error.cause, "ProjectionStoreThreadNotFoundError")
               ? Effect.undefined
               : Effect.fail(error),
         }),
@@ -221,9 +225,9 @@ const make = Effect.gen(function* () {
         worktreePath !== null &&
         (yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => false)));
       const result = yield* textGeneration.generateThreadTitle({
-        cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
+        cwd: worktreeExists ? worktreePath : project.workspaceRoot,
         message: context.message,
-        projectTitle: project.value.title,
+        projectTitle: project.title,
         attachments: context.attachments,
         ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
         ...(inherited === undefined ? {} : { forkSource: inherited }),

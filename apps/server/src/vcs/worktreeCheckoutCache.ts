@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as CheckoutCloner from "./CheckoutCloner.ts";
-import type * as GitVcsDriver from "./GitVcsDriver.ts";
+import type * as GitVcsDriver from "#t3/git-vcs-driver";
 import { indexEntryStat, parseIndex, restatIndex, type IndexEntryStat } from "./gitIndexStat.ts";
 
 const KEEP_PER_REPOSITORY = 3;

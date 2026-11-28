@@ -385,7 +385,14 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
       executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
     }
   }).pipe(
-    Effect.ensuring(Option.isSome(progress) ? Ref.set(progress.value.current, null) : Effect.void),
+    Effect.ensuring(
+      (() => {
+        const progressRef = Option.getOrUndefined(progress);
+        return progressRef === undefined
+          ? Effect.void
+          : Ref.set(progressRef.current, null);
+      })(),
+    ),
   );
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

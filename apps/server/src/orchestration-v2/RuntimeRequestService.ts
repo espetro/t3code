@@ -46,8 +46,6 @@ export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<Run
   }
 }
 
-const isRuntimeRequestResponseExecutionError = Schema.is(RuntimeRequestResponseExecutionError);
-
 export interface RuntimeRequestServiceV2Shape {
   readonly respond: (input: {
     readonly threadId: ThreadId;
@@ -107,7 +105,8 @@ export const layer: Layer.Layer<
             });
           }
           const session = yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) {
+          const sessionRuntime = Option.getOrUndefined(session);
+          if (sessionRuntime === undefined) {
             return yield* new RuntimeRequestResponseExecutionError({
               reason: "provider-session-not-active",
               threadId: input.threadId,
@@ -115,7 +114,7 @@ export const layer: Layer.Layer<
               requestId: input.requestId,
             });
           }
-          yield* session.value.respondToRuntimeRequest({
+          yield* sessionRuntime.respondToRuntimeRequest({
             requestId: input.requestId,
             ...(input.decision === undefined ? {} : { decision: input.decision }),
             ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
@@ -125,15 +124,13 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isRuntimeRequestResponseExecutionError(cause)
-                ? cause
-                : new RuntimeRequestResponseExecutionError({
-                    reason: "unexpected-failure",
-                    threadId: input.threadId,
-                    providerSessionId: input.providerSessionId,
-                    requestId: input.requestId,
-                    cause,
-                  }),
+              new RuntimeRequestResponseExecutionError({
+                reason: "unexpected-failure",
+                threadId: input.threadId,
+                providerSessionId: input.providerSessionId,
+                requestId: input.requestId,
+                cause,
+              }),
             ),
           ),
       ),

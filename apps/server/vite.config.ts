@@ -9,6 +9,7 @@ import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-vers
 import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
+import { emitPackedClient } from "./scripts/packClient.ts";
 
 // NSIS install time tracks file count, not bytes.
 import {
@@ -107,6 +108,16 @@ export default mergeConfig(
               code: JSON.stringify({ ...packageJson, version: buildVersion }),
               moduleType: "json",
             };
+          },
+        },
+        {
+          name: "t3code:pack-client",
+          closeBundle() {
+            if (packExecutable) return;
+            emitPackedClient({
+              distDir: NodePath.join(import.meta.dirname, "dist"),
+              webDist: NodePath.join(import.meta.dirname, "../web/dist"),
+            });
           },
         },
       ],

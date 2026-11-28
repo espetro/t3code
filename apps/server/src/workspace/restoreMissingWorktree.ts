@@ -14,7 +14,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import { scratchFolderRoot } from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";

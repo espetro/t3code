@@ -6,9 +6,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import { forkParked } from "../serverActivation.ts";
-import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as VcsStatusBroadcaster from "#t3/vcs-status-broadcaster";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 

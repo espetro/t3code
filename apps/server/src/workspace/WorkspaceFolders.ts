@@ -204,8 +204,9 @@ const readCodeWorkspaceFolders = Effect.fn("WorkspaceFolders.readCodeWorkspaceFo
   const document = yield* fileSystem
     .readFileString(path.join(root, fileName))
     .pipe(Effect.flatMap(decodeCodeWorkspace), Effect.option);
-  if (Option.isNone(document)) return null;
-  return (document.value.folders ?? []).flatMap((folder) => {
+  const workspaceDocument = Option.getOrUndefined(document);
+  if (workspaceDocument === undefined) return null;
+  return (workspaceDocument.folders ?? []).flatMap((folder) => {
     const folderPath = folder.path?.trim();
     if (folderPath === undefined || folderPath === "") return [];
     const resolved = path.resolve(root, folderPath);
@@ -337,10 +338,11 @@ export const discoverFolders = Effect.fn("WorkspaceFolders.discover")(function* 
   if (ignored.some((entry) => isWithinRoot(path, root, entry))) return [];
   // Uncapped: the folders outside the project are dropped below, and must not use up the room.
   const scan = yield* scanFolders({ workspaceRoot }, Number.POSITIVE_INFINITY).pipe(Effect.option);
-  if (Option.isNone(scan)) return [];
+  const scanResult = Option.getOrUndefined(scan);
+  if (scanResult === undefined) return [];
   const realRoot = yield* realPath(root);
   const inside = yield* Effect.filter(
-    scan.value.folders.filter(
+    scanResult.folders.filter(
       (folder) =>
         folder.isGitRepository &&
         !ignored.some((entry) => folder.path === entry || isWithinRoot(path, folder.path, entry)),
@@ -419,13 +421,14 @@ const make = Effect.gen(function* () {
           () => new WorkspaceFoldersError({ operation: "list", detail: "Failed to read project." }),
         ),
       );
-    if (Option.isNone(row)) {
+    const projectRow = Option.getOrUndefined(row);
+    if (projectRow === undefined) {
       return yield* new WorkspaceFoldersError({
         operation: "list",
         detail: `Project ${projectId} was not found.`,
       });
     }
-    return row.value;
+    return projectRow;
   });
 
   const classifyAll = (folders: ReadonlyArray<ProjectTrackedFolder>) =>
@@ -501,7 +504,8 @@ const make = Effect.gen(function* () {
   // folder was laid out. Only those inside the thread's own folder count: they need no grant.
   const checkedOutSince = Effect.fnUntraced(function* (cwd: string, taskFolder: TaskFolder) {
     const project = yield* readProject(taskFolder.projectId).pipe(Effect.option);
-    if (Option.isNone(project)) return [];
+    const projectRow = Option.getOrUndefined(project);
+    if (projectRow === undefined) return [];
     const recorded = new Set(
       taskFolder.repositories.flatMap((repository) => [
         repository.repositoryPath,
@@ -509,7 +513,7 @@ const make = Effect.gen(function* () {
       ]),
     );
     const found = yield* Effect.forEach(
-      yield* foldersOf(project.value),
+      yield* foldersOf(projectRow),
       Effect.fnUntraced(function* (folder) {
         if (recorded.has(folder.path) || !isWithinRoot(path, folder.path, taskFolder.anchor))
           return [];

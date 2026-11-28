@@ -238,9 +238,8 @@ export const hasUnknownUnionTag = (
     !known.has((value as Record<string, unknown>)[tag] as string);
 };
 
-export const isUnknownUnionMember = <A>(
-  value: A,
-): value is Extract<A, UnknownUnionMember<string>> => value instanceof UnknownUnionMember;
+export const isUnknownUnionMember = (value: unknown): boolean =>
+  value instanceof UnknownUnionMember;
 
 export const ForwardCompatibleUnionArray = <
   const Members extends ReadonlyArray<Schema.Top & { readonly fields: object }>,
@@ -256,10 +255,14 @@ export const ForwardCompatibleUnionArray = <
         ReadonlyArray<Members[number]["Type"]>,
         ReadonlyArray<Members[number]["Type"] | UnknownUnionMember<Tag>>
       >({
-        decode: (values) =>
-          values.filter((value) => !isUnknownUnionMember(value)) as ReadonlyArray<
-            Members[number]["Type"]
-          >,
+        decode: (values) => {
+          const kept: Array<Members[number]["Type"]> = [];
+          for (const value of values) {
+            if (value instanceof UnknownUnionMember) continue;
+            kept.push(value);
+          }
+          return kept;
+        },
         encode: (values) => values,
       }),
     ),

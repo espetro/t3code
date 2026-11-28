@@ -56,7 +56,7 @@ import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
-import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as McpSessionRegistry from "#t3/mcp-session-registry";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import {
@@ -490,24 +490,27 @@ export const layerWithOptions = (
       const installationGate = yield* ProviderInstallationGate.ProviderInstallationGate;
       // Labs flag, read live: Codex per turn (its shared session outlives a toggle), Claude per query.
       // Unreadable settings keep it off.
-      const promptSuggestionsEnabled = Option.isNone(serverSettings)
-        ? Effect.succeed(false)
-        : serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.promptSuggestionsEnabled),
-            Effect.orElseSucceed(() => false),
-          );
+      const serverSettingsService = Option.getOrUndefined(serverSettings);
+      const promptSuggestionsEnabled =
+        serverSettingsService === undefined
+          ? Effect.succeed(false)
+          : serverSettingsService.getSettings.pipe(
+              Effect.map((settings) => settings.promptSuggestionsEnabled),
+              Effect.orElseSucceed(() => false),
+            );
       // Read per turn, so the feedback instruction follows the setting without a restart.
-      const agentFeedbackMode = Option.isNone(serverSettings)
-        ? Effect.succeed("off" as const)
-        : serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.agentFeedback.mode),
-            Effect.orElseSucceed(() => "off" as const),
-          );
+      const agentFeedbackMode =
+        serverSettingsService === undefined
+          ? Effect.succeed("off" as const)
+          : serverSettingsService.getSettings.pipe(
+              Effect.map((settings) => settings.agentFeedback.mode),
+              Effect.orElseSucceed(() => "off" as const),
+            );
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
-          if (Option.isNone(serverSettings)) return { browser: true, device: false };
+          if (serverSettingsService === undefined) return { browser: true, device: false };
           return yield* Effect.gen(function* () {
-            const settings = yield* serverSettings.value.getSettings;
+            const settings = yield* serverSettingsService.getSettings;
             const thread = yield* projectionStore.getThread(threadId);
             const entries = Object.values(settings.projectSettingsOverrides);
             const browserOverridden = entries.some(
@@ -517,9 +520,11 @@ export const layerWithOptions = (
               (entry) => entry.enableAgentDeviceAccess !== undefined,
             );
             if (browserOverridden || deviceOverridden) {
-              const project = Option.isSome(projectService)
-                ? yield* projectService.value.getById(thread.projectId)
-                : Option.none();
+              const projectSvc = Option.getOrUndefined(projectService);
+              const project =
+                projectSvc === undefined
+                  ? Option.none()
+                  : yield* projectSvc.getById(thread.projectId);
               if (Option.isNone(project))
                 return {
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
@@ -545,8 +550,8 @@ export const layerWithOptions = (
         },
       );
       const readLinkedEnvironments = Effect.gen(function* () {
-        if (options.configureMcp === false || Option.isNone(serverSettings)) return undefined;
-        return yield* serverSettings.value.getSettings.pipe(
+        if (options.configureMcp === false || serverSettingsService === undefined) return undefined;
+        return yield* serverSettingsService.getSettings.pipe(
           Effect.map((settings) => settings.linkedEnvironmentsEnabled),
           Effect.orElseSucceed(() => null),
         );
@@ -665,8 +670,13 @@ export const layerWithOptions = (
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
                     // A failed capability read cannot tell that the live credential is wrong.
-                    (Option.isNone(backgroundWait) ||
-                      resolved.capabilities.has("background-wait") === backgroundWait.value) &&
+                    (() => {
+                      const backgroundWaitValue = Option.getOrUndefined(backgroundWait);
+                      return (
+                        backgroundWaitValue === undefined ||
+                        resolved.capabilities.has("background-wait") === backgroundWaitValue
+                      );
+                    })() &&
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent
                   ) {
@@ -979,6 +989,17 @@ export const layerWithOptions = (
       // Read the session's provider threads as soon as it leaves the live map, before a
       // replacement reports its own tasks. Keep OpenCode's background work: its background
       // subagents share a server and can outlive the session.
+      type ReleasedProviderThread = {
+        readonly threadId: ThreadId;
+        readonly providerSessionId: ProviderSessionId;
+        readonly providerThreadId: ProviderThreadId;
+        readonly driver: OrchestrationV2ProviderThread["driver"];
+        readonly taskIds: Set<
+          NonNullable<OrchestrationV2ProviderThread["pendingBackgroundTasks"]>[number]["taskId"]
+        >;
+        readonly lostTasks: NonNullable<OrchestrationV2ProviderThread["pendingBackgroundTasks"]>;
+        readonly lostItems: ReadonlyArray<OrchestrationV2TurnItem>;
+      };
       const readReleasedProviderThreads = Effect.fn(
         "ProviderSessionManager.readReleasedProviderThreads",
       )(
@@ -991,10 +1012,10 @@ export const layerWithOptions = (
             input.reason === "server_shutdown" ||
             input.entry.runtime.backgroundTasksEndWithProcess !== true
           ) {
-            return [];
+            return [] as ReleasedProviderThread[];
           }
           const providerSessionId = input.entry.runtime.providerSessionId;
-          const released = [];
+          const released: ReleasedProviderThread[] = [];
           for (const threadId of releasedThreadIds(input)) {
             const projection = yield* projectionStore.getThreadRecords(threadId, [
               "providerThreads",
@@ -1040,13 +1061,10 @@ export const layerWithOptions = (
               Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
                 providerSessionId: input.entry.runtime.providerSessionId,
                 cause,
-              }).pipe(Effect.as([])),
+              }).pipe(Effect.as([] as ReleasedProviderThread[])),
             ),
           ),
       );
-      type ReleasedProviderThread = Effect.Success<
-        ReturnType<typeof readReleasedProviderThreads>
-      >[number];
 
       // Dead processes cannot report task endings; stale rosters keep threads Waiting.
       const writeReleasedRosterEvents = Effect.fn(
@@ -1204,14 +1222,16 @@ export const layerWithOptions = (
             const now = yield* DateTime.now;
             const allocateEventId = () =>
               idAllocator.allocate.event({ threadId, providerSessionId });
-            const events = yield* endOrphanedNativeSubagent({
-              projection,
-              subagentId: subagent.id,
-              status: "interrupted",
-              now,
-              emitted: [],
-              allocateEventId,
-            });
+            const events: OrchestrationV2DomainEvent[] = [
+              ...(yield* endOrphanedNativeSubagent({
+                projection,
+                subagentId: subagent.id,
+                status: "interrupted",
+                now,
+                emitted: [] as OrchestrationV2DomainEvent[],
+                allocateEventId,
+              })),
+            ];
             if (subagent.childThreadId !== null) {
               const child = yield* projectionStore
                 .getThreadRecords(subagent.childThreadId, ["nodes", "providerTurns", "turnItems"], {
@@ -1586,8 +1606,9 @@ export const layerWithOptions = (
                     yield* retryReleaseRecords(records);
                     return yield* recorded;
                   }
-                  if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
-                    return yield* Effect.failCause(closeExit.value.cause);
+                  const closeExitValue = Option.getOrUndefined(closeExit);
+                  if (closeExitValue !== undefined && Exit.isFailure(closeExitValue)) {
+                    return yield* Effect.failCause(closeExitValue.cause);
                   }
                 }).pipe(
                   withMetrics({
@@ -2964,21 +2985,13 @@ export const layerWithOptions = (
           return {
             settled,
             event: {
-              type: "turn.terminal",
-              driver: event.driver,
-              providerThreadId: event.providerThreadId,
-              providerTurnId: event.providerTurnId,
-              runOrdinal: event.runOrdinal,
-              failureItemOrdinal: stalled.ordinal,
-              failureItemId: stalled.id,
-              status: "failed",
+              ...event,
+              status: "failed" as const,
               failure: { ...stalled.failure, retryable: false },
               retry: stalled.retry,
+              failureItemOrdinal: stalled.ordinal,
+              failureItemId: stalled.id,
               ...(stalled.startedAt === null ? {} : { retryStartedAt: stalled.startedAt }),
-              threadDisposition: event.threadDisposition,
-              ...(event.retainedRuntimeRequestIds === undefined
-                ? {}
-                : { retainedRuntimeRequestIds: event.retainedRuntimeRequestIds }),
             },
           };
         };
@@ -3546,14 +3559,15 @@ export const layerWithOptions = (
                   "providerTurns",
                 ]),
               );
-              if (Option.isSome(projection)) {
+              const projectionRecords = Option.getOrUndefined(projection);
+              if (projectionRecords !== undefined) {
                 const providerThreads = new Map(
-                  projection.value.providerThreads
+                  projectionRecords.providerThreads
                     .filter((thread) => thread.providerSessionId === input.providerSessionId)
                     .map((thread) => [thread.id, thread] as const),
                 );
                 detachedProviderThreads = [...providerThreads.values()];
-                const activeTurns = projection.value.providerTurns.filter(
+                const activeTurns = projectionRecords.providerTurns.filter(
                   (turn) => turn.status === "running" && providerThreads.has(turn.providerThreadId),
                 );
                 yield* Effect.forEach(
@@ -3633,22 +3647,23 @@ export const layerWithOptions = (
                 updated,
               ] as const;
             });
-            if (Option.isSome(detachResult)) {
-              yield* Effect.forEach(detachResult.value.idleUnloadFibers, cancelIdleFiber, {
+            const detachedUpdate = Option.getOrUndefined(detachResult);
+            if (detachedUpdate !== undefined) {
+              yield* Effect.forEach(detachedUpdate.idleUnloadFibers, cancelIdleFiber, {
                 discard: true,
               });
             }
-            const detached = Option.map(detachResult, (result) => result.entry);
+            const detachedEntry = detachedUpdate?.entry;
             // Plain detaches preserve credentials held by live shared providers across workspace handoffs.
             if (input.revokeMcpCredential === true) {
               yield* clearMcpSession(input.threadId);
             }
-            if (Option.isNone(detached)) {
+            if (detachedEntry === undefined) {
               return;
             }
             if (
-              detached.value.attachedThreadIds.size === 0 &&
-              !detached.value.supportsMultipleProviderThreads
+              detachedEntry.attachedThreadIds.size === 0 &&
+              !detachedEntry.supportsMultipleProviderThreads
             ) {
               yield* releaseEntry({
                 providerSessionId: input.providerSessionId,
@@ -3658,8 +3673,8 @@ export const layerWithOptions = (
               });
               return;
             }
-            const unloadThread = detached.value.exposedRuntime.unloadThread;
-            if (detached.value.supportsMultipleProviderThreads && unloadThread !== undefined) {
+            const unloadThread = detachedEntry.exposedRuntime.unloadThread;
+            if (detachedEntry.supportsMultipleProviderThreads && unloadThread !== undefined) {
               // The projection includes native children owned by other app threads;
               // lock each owner so an attached child stays loaded and later attaches wait.
               for (const providerThread of detachedProviderThreads) {
@@ -3673,7 +3688,7 @@ export const layerWithOptions = (
                   Effect.gen(function* () {
                     const entry = (yield* Ref.get(sessions)).get(key);
                     if (
-                      entry?.runtime !== detached.value.runtime ||
+                      entry?.runtime !== detachedEntry.runtime ||
                       entry.attachedThreadIds.has(ownerThreadId)
                     ) {
                       return;

@@ -52,7 +52,10 @@ export class RuntimePolicyAboveCeilingError extends Schema.TaggedError<RuntimePo
   }
 }
 
-export const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingError);
+export const isRuntimePolicyAboveCeilingError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  Reflect.get(error, "_tag") === "RuntimePolicyAboveCeilingError";
 
 export const RuntimePolicyV2Error = Schema.Union([
   RuntimePolicyResolveError,

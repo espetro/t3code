@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -12,6 +13,7 @@ import * as CursorSdk from "@t3tools/provider-cursor/server/CursorSdk";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
 
 export type ProviderOrchestrationAdapterInfrastructure =
   | ClaudeAdapterV2.ClaudeAgentSdkQueryRunner
@@ -38,6 +40,46 @@ export const layerIdAllocator = Layer.unwrap(
   }),
 );
 
+export function cursorSdkWorkerLaunchFrom(input: {
+  readonly isExecutable: boolean;
+  readonly hostCommand: string;
+  readonly hostEntry: string;
+  readonly nodePath: string;
+  readonly workerPath: string;
+}): { readonly command: string; readonly args: ReadonlyArray<string> } {
+  if (!input.isExecutable) {
+    return { command: input.hostCommand, args: [input.hostEntry, "__cursor-sdk-worker"] };
+  }
+  return {
+    command: input.nodePath,
+    args: input.workerPath.endsWith(".ts")
+      ? ["--experimental-strip-types", input.workerPath]
+      : [input.workerPath],
+  };
+}
+
+const resolveCursorSdkWorkerFile = Effect.fn("resolveCursorSdkWorkerFile")(function* () {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const execDir = path.dirname(yield* HostProcess.ExecutablePath);
+  for (const name of [
+    "cursor-sdk-worker.mjs",
+    "cursor-sdk-worker.js",
+    "cursor-sdk-worker.ts",
+  ] as const) {
+    const candidate = path.join(execDir, name);
+    if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
+  }
+  return yield* path
+    .fromFileUrl(
+      new URL(
+        import.meta.url.endsWith(".ts") ? "./cursorSdkWorker.ts" : "./cursorSdkWorker.mjs",
+        import.meta.url,
+      ),
+    )
+    .pipe(Effect.orDie);
+});
+
 const resolveCursorWorkerLaunch = Effect.gen(function* () {
   const path = yield* Path.Path;
   const command = yield* HostProcess.ExecutablePath;
@@ -49,9 +91,23 @@ const resolveCursorWorkerLaunch = Effect.gen(function* () {
       new URL(import.meta.url.endsWith(".ts") ? "../bin.ts" : "./bin.mjs", import.meta.url),
     )
     .pipe(Effect.orDie);
+  const launch = isExecutable
+    ? cursorSdkWorkerLaunchFrom({
+        isExecutable: true,
+        hostCommand: command,
+        hostEntry: entry,
+        nodePath: yield* resolveNodeExecutable("Cursor"),
+        workerPath: yield* resolveCursorSdkWorkerFile(),
+      })
+    : cursorSdkWorkerLaunchFrom({
+        isExecutable: false,
+        hostCommand: command,
+        hostEntry: entry,
+        nodePath: command,
+        workerPath: entry,
+      });
   return {
-    command,
-    args: [...(isExecutable ? [] : [entry]), "__cursor-sdk-worker"],
+    ...launch,
     ...(providerProcesses.register === undefined
       ? {}
       : { registerProcess: providerProcesses.register }),
@@ -65,8 +121,12 @@ export const layer = Layer.mergeAll(
   Layer.unwrap(
     Effect.gen(function* () {
       const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
       return CursorAgentSdkProcessRunner.layer(
-        resolveCursorWorkerLaunch.pipe(Effect.provideService(Path.Path, path)),
+        resolveCursorWorkerLaunch.pipe(
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(FileSystem.FileSystem, fs),
+        ),
       );
     }),
   ),

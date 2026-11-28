@@ -4138,3 +4138,48 @@ diff --git a/src/sql/SqlClient.ts b/src/sql/SqlClient.ts
                          services.pipe(
                            Context.add(options.transactionService, level),
                            Context.add(CurrentTransactionService, options.transactionService),
+
+diff --git a/dist/crypto/internal/chacha.js b/dist/crypto/internal/chacha.js
+--- a/dist/crypto/internal/chacha.js
++++ b/dist/crypto/internal/chacha.js
+@@ -263,18 +263,12 @@
+   }
+ }
+ function createCipher(core, opts) {
+-  const {
+-    allowShortKeys,
+-    extendNonceFn,
+-    counterLength,
+-    counterRight,
+-    rounds
+-  } = checkOpts({
+-    allowShortKeys: false,
+-    counterLength: 8,
+-    counterRight: false,
+-    rounds: 20
+-  }, opts);
++  aobject(opts, "opts");
++  const allowShortKeys = opts.allowShortKeys !== undefined ? opts.allowShortKeys : false;
++  const extendNonceFn = opts.extendNonceFn;
++  const counterLength = opts.counterLength !== undefined ? opts.counterLength : 8;
++  const counterRight = opts.counterRight !== undefined ? opts.counterRight : false;
++  const rounds = opts.rounds !== undefined ? opts.rounds : 20;
+   if (typeof core !== "function") throw new Error("core must be a function");
+   anumber(counterLength);
+   anumber(rounds);
+diff --git a/dist/crypto/internal/md5.js b/dist/crypto/internal/md5.js
+--- a/dist/crypto/internal/md5.js
++++ b/dist/crypto/internal/md5.js
+@@ -56,9 +56,9 @@
+ const MD5_W = /*#__PURE__*/new Uint32Array(16);
+ const MD5_SHIFTS = /*#__PURE__*/(() => {
+   const S = [[7, 12, 17, 22], [5, 9, 14, 20], [4, 11, 16, 23], [6, 10, 15, 21]];
+-  return Uint8Array.from({
+-    length: 64
+-  }, (_, i) => S[Math.floor(i / 16)][i % 4]);
++  const out = new Uint8Array(64);
++  for (let i = 0; i < 64; i++) out[i] = S[Math.floor(i / 16)][i % 4];
++  return out;
+ })();
+ const blockLen = 64;
+ const outputLen = 16;

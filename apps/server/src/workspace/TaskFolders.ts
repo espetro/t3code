@@ -40,12 +40,12 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   removeEmptyDirectory,
@@ -565,13 +565,14 @@ const make = Effect.gen(function* () {
     const row = yield* projects
       .get(projectId)
       .pipe(Effect.mapError(fail(operation, "Could not read the project")));
-    if (Option.isNone(row)) {
+    const projectRow = Option.getOrUndefined(row);
+    if (projectRow === undefined) {
       return yield* new TaskFolderError({
         operation,
         detail: `Project ${projectId} was not found.`,
       });
     }
-    return row.value;
+    return projectRow;
   });
 
   const plan: TaskFolders["Service"]["plan"] = Effect.fn("TaskFolders.plan")(function* (input) {
@@ -762,8 +763,9 @@ const make = Effect.gen(function* () {
       target = path.join(target, segment);
       const last = index === segments.length - 1;
       const link = yield* fileSystem.readLink(target).pipe(Effect.option);
-      if (Option.isSome(link)) {
-        if (path.resolve(path.dirname(target), link.value) !== source) return false;
+      const linkTarget = Option.getOrUndefined(link);
+      if (linkTarget !== undefined) {
+        if (path.resolve(path.dirname(target), linkTarget) !== source) return false;
         yield* fileSystem.remove(target);
         if (!last) yield* linkFolder(source, target, [], segments[index + 1]);
       } else if (!last) {
@@ -1385,8 +1387,9 @@ const make = Effect.gen(function* () {
     const project = yield* projects
       .findActiveByWorkspaceRoot(input.cwd)
       .pipe(Effect.mapError(fail("plan", "Could not read the project")));
-    if (Option.isNone(project)) return null;
-    const { projectId } = project.value;
+    const projectRow = Option.getOrUndefined(project);
+    if (projectRow === undefined) return null;
+    const { projectId } = projectRow;
     const taskPlan = yield* plan({ projectId });
     if (taskPlan === null) return null;
     const { taskFolder, branch } = yield* create({

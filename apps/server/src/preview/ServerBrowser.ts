@@ -51,6 +51,7 @@ import {
 import { AgentScope, agentScopeLauncherScript } from "@t3tools/shared/AgentScope";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
 import { appLinkUrl } from "@t3tools/shared/appLinks";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
@@ -94,6 +95,7 @@ import * as PreviewManager from "./Manager.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
+import { playwrightSidecarDriverCandidates } from "./playwrightSidecarRpc.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
@@ -717,11 +719,35 @@ const make = Effect.gen(function* () {
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
 
+  const isNativeExecutable = yield* HostProcess.IsExecutable;
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
     idleBrowserMs: 5 * 60_000,
     executable: () => runPromise(previewBrowser.executable),
     chrome: { version: PreviewBrowser.VERSION, platform: host.platform },
+    resolveSidecar: isNativeExecutable
+      ? () =>
+          runPromise(
+            Effect.gen(function* () {
+              const nodePath = yield* resolveNodeExecutable("Browser preview");
+              const fs = yield* FileSystem.FileSystem;
+              const candidates = playwrightSidecarDriverCandidates({
+                execDir: NodePath.dirname(yield* HostProcess.ExecutablePath),
+                moduleDir: import.meta.dirname,
+                source: import.meta.url.endsWith(".ts"),
+                join: NodePath.join,
+              });
+              let driverPath = candidates[candidates.length - 1]!;
+              for (const candidate of candidates) {
+                if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+                  driverPath = candidate;
+                  break;
+                }
+              }
+              return { nodePath, driverPath };
+            }),
+          )
+      : undefined,
     // An agent scope keeps Chrome out of the server's memory protection and OOM score.
     launcher: async (executable) => {
       const launch = await runPromise(

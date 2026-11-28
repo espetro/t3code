@@ -51,8 +51,8 @@ import {
 } from "@t3tools/shared/git";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitWorkflow from "#t3/git-workflow-service";
+import type * as GitVcsDriver from "#t3/git-vcs-driver";
 import { parseGitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -71,6 +71,7 @@ import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import { isWithinRoot } from "../workspace/KnownWorkspaces.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
+import { taggedError } from "./scriptcBindScope.ts";
 
 // The agent waits for its branch name; a rate-limited provider would hold it for minutes.
 const BRANCH_NAME_TIMEOUT = "20 seconds";
@@ -273,13 +274,12 @@ export class ThreadLaunchService extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadLaunchService") {}
 
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
 function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
+  if (taggedError(error, "ThreadLaunchError")) {
+    const cause = Reflect.get(error, "cause");
+    const operation = String(Reflect.get(error, "operation") ?? "launch");
     const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
+    return `Workspace preparation failed during ${operation.replaceAll("-", " ")}: ${detail}`;
   }
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
 }
@@ -448,7 +448,8 @@ const make = Effect.gen(function* () {
     );
     // launch() turns a Scratch worktree request into a root launch.
     if (isScratch) return;
-    if (Option.isSome(receipt) && receipt.value.status === "accepted") return;
+    const receiptValue = Option.getOrUndefined(receipt);
+    if (receiptValue !== undefined && receiptValue.status === "accepted") return;
     const project = Option.getOrUndefined(projectOption);
     if (project === undefined) return;
     const cwd = project.workspaceRoot;
@@ -534,9 +535,10 @@ const make = Effect.gen(function* () {
     const project = yield* projects
       .getById(projectId)
       .pipe(Effect.orElseSucceed(() => Option.none()));
-    if (Option.isNone(project)) return false;
+    const projectRow = Option.getOrUndefined(project);
+    if (projectRow === undefined) return false;
     // Unlike `git.repositoryRoot`, this fails on a repository Git cannot read, which is not "no repository".
-    return yield* checkpointStore.isGitRepository(project.value.workspaceRoot).pipe(
+    return yield* checkpointStore.isGitRepository(projectRow.workspaceRoot).pipe(
       Effect.map((isRepository) => !isRepository),
       Effect.orElseSucceed(() => false),
     );
@@ -1480,12 +1482,13 @@ const make = Effect.gen(function* () {
       });
       return yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
+        const launchReceiptValue = Option.getOrUndefined(launchReceipt);
         const reusableLaunchReceipt =
           input.threadId === undefined &&
-          Option.isSome(launchReceipt) &&
-          launchReceipt.value.status === "accepted" &&
-          launchReceipt.value.commandType === "thread.create"
-            ? launchReceipt.value
+          launchReceiptValue !== undefined &&
+          launchReceiptValue.status === "accepted" &&
+          launchReceiptValue.commandType === "thread.create"
+            ? launchReceiptValue
             : undefined;
         const candidateThreadId =
           input.threadId ??

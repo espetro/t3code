@@ -1,4 +1,4 @@
-import { CommandId, NonNegativeInt, ProjectId, ThreadId } from "@t3tools/contracts";
+import { CommandId, NonNegativeInt, ProjectId, ThreadId } from "@t3tools/contracts/baseSchemas";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -178,19 +178,20 @@ const layerBase: Layer.Layer<
         ),
       getProjectByCommandId: (commandId) =>
         receipts.getByCommandId({ commandId }).pipe(
-          Effect.flatMap((receipt) =>
-            Option.isNone(receipt) || receipt.value.aggregateKind !== "project"
+          Effect.flatMap((receipt) => {
+            const receiptValue = Option.getOrUndefined(receipt);
+            return receiptValue === undefined || receiptValue.aggregateKind !== "project"
               ? Effect.succeedNone
               : decodeProjectReceipt({
-                  commandId: receipt.value.commandId,
-                  projectId: receipt.value.aggregateId,
-                  commandType: receipt.value.commandType,
-                  acceptedAt: receipt.value.acceptedAt,
-                  resultSequence: receipt.value.resultSequence,
-                  status: receipt.value.status,
-                  error: receipt.value.error,
-                }).pipe(Effect.asSome),
-          ),
+                  commandId: receiptValue.commandId,
+                  projectId: receiptValue.aggregateId,
+                  commandType: receiptValue.commandType,
+                  acceptedAt: receiptValue.acceptedAt,
+                  resultSequence: receiptValue.resultSequence,
+                  status: receiptValue.status,
+                  error: receiptValue.error,
+                }).pipe(Effect.asSome);
+          }),
           Effect.mapError((cause) => new CommandReceiptStoreReadError({ commandId, cause })),
         ),
     } satisfies CommandReceiptStoreV2Shape);

@@ -411,7 +411,10 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((decoded) =>
         Arr.filterMap(decoded, (row) =>
-          Option.isSome(row) ? Result.succeed(row.value) : Result.failVoid,
+          (() => {
+            const value = Option.getOrUndefined(row);
+            return value === undefined ? Result.failVoid : Result.succeed(value);
+          })(),
         ),
       ),
     );

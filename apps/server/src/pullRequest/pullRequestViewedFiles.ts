@@ -15,7 +15,7 @@ import type {
   ProviderFileRevisions,
   PullRequestProviderError,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
-import type { PullRequestError, SupportedProject } from "./PullRequestService.ts";
+import type { PullRequestError, SupportedProject } from "#t3/pull-request-service";
 
 const FILE_REVISIONS_CACHE_TTL = Duration.seconds(60);
 const FILE_REVISIONS_STALE_WINDOW = Duration.minutes(10);

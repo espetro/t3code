@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +13,7 @@ import * as HostProcess from "./HostProcess.ts";
 import {
   MACOS_MANAGED_PREFERENCES_PATH,
   managedPolicyPath,
+  parseRegQueryOutput,
   readManagedPolicy,
   type RegistryKey,
   WINDOWS_POLICY_KEY,
@@ -327,7 +329,7 @@ describe("readManagedPolicy", () => {
   );
 
   it.effect.runIf(HostProcess.Platform.defaultValue() === "win32")(
-    "lists registry values and subkeys through the Win32 API",
+    "lists registry values and subkeys through reg.exe",
     () =>
       Effect.gen(function* () {
         const registry = yield* WindowsRegistry;
@@ -349,6 +351,28 @@ describe("readManagedPolicy", () => {
         );
         const parent = yield* registry.readMachineKey("SOFTWARE\\Microsoft\\Windows NT");
         assert.isTrue(parent?.subkeys.includes("CurrentVersion"));
-      }).pipe(Effect.provide(layerWindowsRegistry(() => import("ffi-rs")))),
+      }).pipe(Effect.provide(layerWindowsRegistry().pipe(Layer.provide(NodeServices.layer)))),
   );
+});
+
+describe("parseRegQueryOutput", () => {
+  it("reads REG_SZ, REG_DWORD, other types, and immediate subkeys", () => {
+    const parsed = parseRegQueryOutput(
+      "SOFTWARE\\Policies\\T3Tools\\T3Code",
+      [
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\T3Tools\\T3Code",
+        "    Organization    REG_SZ    Example Corp",
+        "    Telemetry    REG_DWORD    0x0",
+        "    ProgramFilesPath    REG_EXPAND_SZ    %ProgramFiles%",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\T3Tools\\T3Code\\Clients",
+      ].join("\r\n"),
+    );
+    assert.deepEqual(parsed.values, [
+      { name: "Organization", type: "REG_SZ", data: "Example Corp" },
+      { name: "Telemetry", type: "REG_DWORD", data: 0 },
+      { name: "ProgramFilesPath", type: "other" },
+    ]);
+    assert.deepEqual(parsed.subkeys, ["Clients"]);
+  });
 });

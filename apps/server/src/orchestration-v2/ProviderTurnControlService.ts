@@ -23,6 +23,7 @@ import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { taggedError } from "./scriptcBindScope.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -48,8 +49,6 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
@@ -255,9 +254,9 @@ export const layer: Layer.Layer<
           ) {
             return;
           }
-          const session = yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session) || session.value.applyModelSelection === undefined) return;
-          yield* session.value.applyModelSelection({
+          const session = Option.getOrUndefined(yield* sessions.get(input.providerSessionId));
+          if (session === undefined || session.applyModelSelection === undefined) return;
+          yield* session.applyModelSelection({
             providerThread,
             modelSelection: input.modelSelection,
           });
@@ -271,17 +270,20 @@ export const layer: Layer.Layer<
           (candidate) => candidate.id === thread.activeProviderThreadId,
         );
         if (!providerThread?.providerSessionId) return;
-        const session = yield* sessions.get(providerThread.providerSessionId);
-        if (Option.isNone(session) || session.value.applyThreadTitle === undefined) return;
-        yield* session.value.applyThreadTitle({ providerThread, title: input.title });
+        const session = Option.getOrUndefined(
+          yield* sessions.get(providerThread.providerSessionId),
+        );
+        if (session === undefined || session.applyThreadTitle === undefined) return;
+        yield* session.applyThreadTitle({ providerThread, title: input.title });
       }),
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {
           const loaded = yield* load({ ...input, operation: "interrupt" });
-          const session = Option.isSome(loaded.session)
+          const sessionOption = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) {
+          const session = Option.getOrUndefined(sessionOption);
+          if (session === undefined) {
             if (input.subagent !== undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,
@@ -293,7 +295,7 @@ export const layer: Layer.Layer<
             return;
           }
           if (input.subagent !== undefined) {
-            if (session.value.stopSubagent === undefined) {
+            if (session.stopSubagent === undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,
                 operation: "interrupt",
@@ -301,7 +303,7 @@ export const layer: Layer.Layer<
                 cause: "The provider does not support stopping a native subagent.",
               });
             }
-            return yield* session.value.stopSubagent({
+            return yield* session.stopSubagent({
               providerThread: loaded.providerThread,
               nativeTaskId: input.subagent.nativeTaskId,
               ...(input.subagent.requestedAt === undefined
@@ -310,7 +312,7 @@ export const layer: Layer.Layer<
             });
           }
           // Settled turns still reach adapters, which alone know whether background work remains.
-          yield* session.value
+          yield* session
             .interruptTurn({
               providerThread: loaded.providerThread,
               providerTurnId: loaded.providerTurn.id,
@@ -343,21 +345,20 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "interrupt",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),
       interruptAndAwaitTerminal: Effect.fn("ProviderTurnControlService.interruptAndAwaitTerminal")(
         function* (input) {
           const loaded = yield* load({ ...input, operation: "restart" });
-          if (Option.isNone(loaded.session)) {
+          const session = Option.getOrUndefined(loaded.session);
+          if (session === undefined) {
             // Without a live adapter, no terminal event can arrive; proceed to detach/start without polling.
             if (loaded.providerTurn.status === "running") {
               yield* Effect.logWarning(
@@ -372,7 +373,7 @@ export const layer: Layer.Layer<
             return;
           }
 
-          yield* loaded.session.value.interruptTurn({
+          yield* session.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
           });
@@ -407,14 +408,12 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "restart",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "restart",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),
@@ -438,7 +437,8 @@ export const layer: Layer.Layer<
               return;
           }
           const loaded = yield* load({ ...input, operation: "steer" });
-          if (Option.isNone(loaded.session)) return;
+          const session = Option.getOrUndefined(loaded.session);
+          if (session === undefined) return;
           const { message, run } = loaded.context;
           if (message === undefined || run === undefined) {
             return yield* new ProviderTurnControlError({
@@ -452,7 +452,7 @@ export const layer: Layer.Layer<
             mcpAppModelContext,
             input.threadId,
           );
-          yield* loaded.session.value
+          yield* session
             .steerTurn({
               threadId: input.threadId,
               runId: run.id,
@@ -497,7 +497,7 @@ export const layer: Layer.Layer<
               }),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
-                  if (isProviderTurnControlError(cause)) return yield* cause;
+                  if (taggedError(cause, "ProviderTurnControlError")) return yield* cause;
                   const current = yield* projections.getProviderControlContext(
                     input.threadId,
                     input,
@@ -517,14 +517,12 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "steer",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),

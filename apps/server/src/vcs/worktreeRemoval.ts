@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import type * as GitVcsDriver from "./GitVcsDriver.ts";
+import type * as GitVcsDriver from "#t3/git-vcs-driver";
 
 const INDEX_LIST_MAX_BYTES = 64 * 1024 * 1024;
 

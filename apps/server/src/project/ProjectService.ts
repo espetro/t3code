@@ -405,8 +405,12 @@ export const make = Effect.gen(function* () {
       if (refine !== undefined) {
         const refined = yield* Effect.exit(refine(project));
         if (Exit.isFailure(refined)) return { refused: refined.cause };
-        if (refined.value === null) return null;
-        command = refined.value;
+        const refinedCommand = Exit.match(refined, {
+          onFailure: () => undefined as never,
+          onSuccess: (value) => value,
+        });
+        if (refinedCommand === null) return null;
+        command = refinedCommand;
       }
       const workspaceOwner =
         workspaceRoot === undefined
@@ -455,7 +459,10 @@ export const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(dispatchError));
     if (outcome === null) return;
-    if ("refused" in outcome) return yield* Effect.failCause(outcome.refused);
+    if ("refused" in outcome) {
+      if (outcome.refused === undefined) return;
+      return yield* Effect.failCause(outcome.refused);
+    }
     const { receipt } = outcome;
     if (receipt.projectId !== projectId || receipt.commandType !== initial.type) {
       return yield* dispatchError(
@@ -485,20 +492,22 @@ export const make = Effect.gen(function* () {
 
   const readCommitted = Effect.fn("ProjectService.readCommitted")(function* (projectId: ProjectId) {
     const row = yield* readRow(projectId, { includeDeleted: true });
-    if (Option.isNone(row)) {
+    const projectRow = Option.getOrUndefined(row);
+    if (projectRow === undefined) {
       return yield* new ProjectOperationError({
         operation: "read-project",
         projectId,
         cause: "The accepted project command did not produce a project row.",
       });
     }
-    return yield* hydrate(row.value);
+    return yield* hydrate(projectRow);
   });
 
   const getById: ProjectService["Service"]["getById"] = Effect.fn("ProjectService.getById")(
     function* (projectId, options) {
       const row = yield* readRow(projectId, options);
-      return Option.isNone(row) ? Option.none() : Option.some(yield* hydrate(row.value));
+      const projectRow = Option.getOrUndefined(row);
+      return projectRow === undefined ? Option.none() : Option.some(yield* hydrate(projectRow));
     },
   );
 
@@ -618,10 +627,11 @@ export const make = Effect.gen(function* () {
   const update: ProjectService["Service"]["update"] = Effect.fn("ProjectService.update")(
     function* (input) {
       const existing = yield* readRow(input.projectId);
-      if (Option.isNone(existing)) {
+      const existingRow = Option.getOrUndefined(existing);
+      if (existingRow === undefined) {
         return yield* new ProjectNotFoundError({ projectId: input.projectId });
       }
-      const previousRoot = existing.value.workspaceRoot;
+      const previousRoot = existingRow.workspaceRoot;
       if (input.workspaceRoot !== undefined && input.workspaceRoot !== previousRoot) {
         yield* rejectWslSharePath(input.projectId, input.workspaceRoot);
       }
@@ -704,7 +714,8 @@ export const make = Effect.gen(function* () {
   const bootstrap: ProjectService["Service"]["bootstrap"] = Effect.fn("ProjectService.bootstrap")(
     function* (input) {
       const existing = yield* getByWorkspaceRoot(input.workspaceRoot);
-      if (Option.isSome(existing)) return { project: existing.value, created: false };
+      const existingProject = Option.getOrUndefined(existing);
+      if (existingProject !== undefined) return { project: existingProject, created: false };
       return { project: yield* create(input), created: true };
     },
   );
@@ -817,11 +828,12 @@ export const make = Effect.gen(function* () {
       const { projectId } = input;
       // Read deleted rows so retries replay receipts and other command ids fail as not found.
       const existing = yield* readRow(projectId, { includeDeleted: true });
-      if (Option.isNone(existing)) {
+      const existingRow = Option.getOrUndefined(existing);
+      if (existingRow === undefined) {
         return yield* new ProjectNotFoundError({ projectId });
       }
 
-      const isFirstDelete = existing.value.deletedAt === null;
+      const isFirstDelete = existingRow.deletedAt === null;
       if (isFirstDelete) {
         yield* deleteChildThreads(input);
       }
@@ -829,7 +841,7 @@ export const make = Effect.gen(function* () {
       if (isFirstDelete) {
         yield* clearProjectSettingsOverrides(projectId);
       }
-      yield* projectEnrichment.invalidate([existing.value.workspaceRoot]);
+      yield* projectEnrichment.invalidate([existingRow.workspaceRoot]);
       return yield* readCommitted(projectId);
     },
   );

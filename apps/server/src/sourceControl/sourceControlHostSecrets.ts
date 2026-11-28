@@ -8,6 +8,8 @@ import {
 import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 
+import type * as Schema from "effect/Schema";
+
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 
 import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
@@ -67,9 +69,12 @@ export function writeSecretFieldValues(
 
 type SourceControlHostsSettings = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 
-const hostSettingsSchemas = new Map(
-  sourceControlDefinitions.definitions.flatMap((definition) =>
-    definition.settings ? [[definition.kind as string, definition.settings] as const] : [],
+const hostSettingsSchemas = new Map<string, Schema.Top>(
+  sourceControlDefinitions.definitions.flatMap(
+    (definition: { readonly kind?: unknown; readonly settings?: Schema.Top | null }) =>
+      definition.settings != null && typeof definition.kind === "string"
+        ? [[definition.kind, definition.settings] as const]
+        : [],
   ),
 );
 
@@ -77,9 +82,11 @@ const hostSettingsSchemas = new Map(
 export function collectSourceControlHostSecretReferences(
   hosts: SourceControlHostsSettings,
 ): ReadonlyArray<SecretReference> {
-  return [...hostSettingsSchemas].flatMap(([kind, schema]) =>
-    secretReferencesInSettings(schema, hosts[kind]).map(({ reference }) => reference),
-  );
+  return [...hostSettingsSchemas].flatMap(([kind, schema]) => {
+    const values = hosts[kind];
+    if (values === undefined) return [];
+    return secretReferencesInSettings(schema, values).map(({ reference }) => reference);
+  });
 }
 
 /** Replaces each secret provider reference in one host kind's credential fields with the secret it names. */

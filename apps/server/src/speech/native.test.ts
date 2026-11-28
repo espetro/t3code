@@ -5,7 +5,34 @@ import * as NodePath from "node:path";
 
 import { expect, it } from "vite-plus/test";
 
-import { loadNativeSpeechModel } from "./native.ts";
+import { loadNativeSpeechModel, speechWorkerArgs, speechWorkerLaunch } from "./native.ts";
+
+it("uses the speech-worker subcommand for packaged hosts", () => {
+  expect(speechWorkerArgs(true, "discover")).toEqual(["__speech-worker", "discover"]);
+  expect(speechWorkerArgs(true, "model", "file:///speech.js")).toEqual([
+    "__speech-worker",
+    "model",
+    "file:///speech.js",
+  ]);
+});
+
+it("evaluates the inlined worker on Node and Electron", () => {
+  const args = speechWorkerArgs(false, "model");
+  expect(args[0]).toBe("--input-type=module");
+  expect(args[1]).toBe("-e");
+});
+
+it("spawns system node with the inlined worker when packaged", () => {
+  const launch = speechWorkerLaunch({
+    isExecutable: true,
+    execPath: "/packaged/t3",
+    nodePath: "/usr/bin/node",
+    mode: "discover",
+  });
+  expect(launch.command).toBe("/usr/bin/node");
+  expect(launch.args[0]).toBe("--input-type=module");
+  expect(launch.args[1]).toBe("-e");
+});
 
 const fixture = (transcribe: string, maxAudioMs = 0, supportsVocabulary = false) =>
   `data:text/javascript,${encodeURIComponent(`export const TranscribeModel = { load: async () => ({ capabilities: { supportsStreaming: false, maxAudioMs: ${maxAudioMs}, languages: ["en-US", "de-DE"] }, supports: (feature) => feature === "vocabulary" && ${supportsVocabulary}, transcribe: ${transcribe} }) };`)}`;

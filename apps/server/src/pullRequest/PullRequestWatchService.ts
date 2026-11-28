@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as PullRequestService from "./PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import {
   resolveTarget,
   type PullRequestTarget,

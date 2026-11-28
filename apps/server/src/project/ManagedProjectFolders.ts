@@ -23,8 +23,8 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitWorkflow from "#t3/git-workflow-service";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProjectService from "./ProjectService.ts";
 
 export class ScratchUnavailableError extends Schema.TaggedError<ScratchUnavailableError>()(
@@ -239,14 +239,15 @@ const make = Effect.gen(function* () {
   ) {
     for (let attempt = 1; ; attempt++) {
       const folder = yield* folderFor(attempt);
-      if (Option.isNone(folder)) return folder;
-      const claimed = yield* fileSystem.makeDirectory(folder.value).pipe(
+      const folderPath = Option.getOrUndefined(folder);
+      if (folderPath === undefined) return folder;
+      const claimed = yield* fileSystem.makeDirectory(folderPath).pipe(
         Effect.as(true),
         Effect.catchIf(
           (error) => error.reason._tag === "AlreadyExists",
           () => Effect.succeed(false),
         ),
-        Effect.mapError((cause) => onError(folder.value, cause)),
+        Effect.mapError((cause) => onError(folderPath, cause)),
       );
       if (claimed) return folder;
     }
@@ -367,14 +368,15 @@ const make = Effect.gen(function* () {
     "ManagedProjectFolders.folderForThread",
   )(function* (input) {
     const root = yield* scratchRoot;
-    if (Option.isNone(root)) return Option.none();
-    if (!(yield* isScratchRoot(input.projectId, root.value))) return Option.none();
+    const scratchRootPath = Option.getOrUndefined(root);
+    if (scratchRootPath === undefined) return Option.none();
+    if (!(yield* isScratchRoot(input.projectId, scratchRootPath))) return Option.none();
     const date = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
     const words = folderWords(input.text);
     const id = input.threadId.toLowerCase().replace(/[^a-z0-9]/g, "");
     const folderFor = (idPart: string) =>
-      path.join(root.value, [date, words, idPart].filter(Boolean).join("-"));
-    yield* makeScratchFolder(root.value);
+      path.join(scratchRootPath, [date, words, idPart].filter(Boolean).join("-"));
+    yield* makeScratchFolder(scratchRootPath);
     const fullFolder = folderFor(id);
     return yield* claimFreeFolder(
       (attempt) =>
@@ -417,7 +419,8 @@ const make = Effect.gen(function* () {
         ),
       (folder, cause) => new NamedProjectFolderError({ folder, cause }),
     );
-    if (Option.isSome(claimed)) return claimed.value;
+    const claimedFolder = Option.getOrUndefined(claimed);
+    if (claimedFolder !== undefined) return claimedFolder;
     return yield* new NamedProjectFolderError({
       folder: path.join(namedProjectsRoot, folderName),
       cause: `Every folder name for "${folderName}" is taken.`,

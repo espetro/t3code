@@ -3,7 +3,11 @@ import * as NodeModule from "node:module";
 import * as NodeSea from "node:sea";
 import * as NodeURL from "node:url";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { isEntrypoint } from "./entrypoint.ts";
+
+if (NodeSea.isSea()) HostProcess.markExecutable();
 
 // Loads the CLI outside the launcher's module graph. Packaged builds embed it as a raw asset.
 async function loadCliMain(): Promise<typeof import("./binMain.ts")> {
@@ -59,6 +63,10 @@ if (
     runProcessLauncher();
   } else {
     const { runCliCommand } = await loadCliMain();
+    if (!NodeSea.isSea()) {
+      const { enableCliCompileCache } = await import("./cliCompileCache.ts");
+      enableCliCompileCache();
+    }
     await runCliCommand();
   }
 }

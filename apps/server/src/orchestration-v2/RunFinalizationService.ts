@@ -9,8 +9,8 @@ import * as Schema from "effect/Schema";
 
 import * as ProjectEnrichment from "../project/ProjectEnrichmentService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
-import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as PullRequestService from "#t3/pull-request-service";
+import * as VcsStatusBroadcaster from "#t3/vcs-status-broadcaster";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -137,18 +137,18 @@ export const layerObserver = Layer.effect(
       "RunFinalizationService.refreshMissingRepositoryIdentity",
     )(
       function* (projectId: ProjectId) {
-        const project = yield* projects.getById(projectId);
-        if (Option.isNone(project)) return;
-        const { workspaceRoot } = project.value;
+        const project = Option.getOrUndefined(yield* projects.getById(projectId));
+        if (project === undefined) return;
+        const { workspaceRoot } = project;
         if ((yield* enrichment.readRepositoryIdentity(workspaceRoot)) !== null) return;
         yield* enrichment.refreshRepositoryIdentity(workspaceRoot);
       },
       (effect, projectId) =>
         effect.pipe(
-          Effect.catch((error) =>
+          Effect.catch((error: unknown) =>
             Effect.logWarning("failed to refresh repository identity after run completion", {
               projectId,
-              detail: error.message,
+              detail: error instanceof Error ? error.message : String(error),
             }),
           ),
         ),
@@ -160,16 +160,19 @@ export const layerObserver = Layer.effect(
       refreshRepositories: Effect.fn("RunFinalizationService.refreshRepositories")(function* ({
         threadId,
         cwds,
+      }: {
+        readonly threadId: ThreadId;
+        readonly cwds: ReadonlyArray<string>;
       }) {
         yield* Effect.forEach(
           cwds,
           (cwd) =>
             vcsStatus.refreshLocalStatus(cwd).pipe(
-              Effect.catch((error) =>
+              Effect.catch((error: unknown) =>
                 Effect.logWarning("failed to refresh repository status after run completion", {
                   threadId,
                   cwd,
-                  detail: error.message,
+                  detail: error instanceof Error ? error.message : String(error),
                 }),
               ),
             ),
@@ -178,7 +181,10 @@ export const layerObserver = Layer.effect(
       }),
       refresh: Effect.fn("RunFinalizationService.refresh")(
         function* ({ cwd, threadId, runId }) {
-          const [, local] = yield* Effect.all(
+          const [, local]: readonly [
+            unknown,
+            { readonly refName: string | null; readonly isDefaultRef?: boolean },
+          ] = yield* Effect.all(
             [workspaceEntries.refresh(cwd), vcsStatus.refreshLocalStatus(cwd)],
             { concurrency: "unbounded" },
           );
@@ -194,11 +200,11 @@ export const layerObserver = Layer.effect(
           // The forge CLI can take minutes, so the next turn must not wait for it. A newer
           // turn's lookup replaces a running one instead of queueing behind the cwd's lock.
           yield* vcsStatus.refreshPullRequestStatus(cwd).pipe(
-            Effect.catch((error) =>
+            Effect.catch((error: unknown) =>
               Effect.logWarning("failed to refresh pull request status after run completion", {
                 threadId,
                 cwd,
-                detail: error.message,
+                detail: error instanceof Error ? error.message : String(error),
               }),
             ),
             FiberMap.run(pullRequestLookups, cwd),
@@ -207,6 +213,17 @@ export const layerObserver = Layer.effect(
         (effect, { cwd }) =>
           effect.pipe(Effect.mapError((cause) => new RunFinalizationRefreshError({ cwd, cause }))),
       ),
+    } as {
+      readonly refreshAfterTurn: (projectId: ProjectId) => Effect.Effect<void>;
+      readonly refreshRepositories: (input: {
+        readonly threadId: ThreadId;
+        readonly cwds: ReadonlyArray<string>;
+      }) => Effect.Effect<void>;
+      readonly refresh: (input: {
+        readonly cwd: string;
+        readonly threadId: ThreadId;
+        readonly runId: RunId;
+      }) => Effect.Effect<void, RunFinalizationRefreshError>;
     };
   }),
 );

@@ -41,6 +41,7 @@ import {
   type AuthAccessStreamEvent,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
+  OrchestrationV2ThreadStreamItem,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
@@ -53,6 +54,7 @@ import * as Deferred from "effect/Deferred";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
 import * as Fiber from "effect/Fiber";
@@ -195,10 +197,13 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import {
+  codecForSkippingTrustedLive,
+  isTrustedLiveRpcFrame,
   layerWsRpc,
   resolveOpenDiscoveryForConfig,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
+  trustLiveRpcFrame,
   WS_RPC_SERVER_OPTIONS,
   withLateConfigDiscovery,
 } from "./ws.ts";
@@ -718,7 +723,27 @@ it.effect("shares each live event item across subscribers and dedupes bodies per
       stringify.mock.calls.filter(([value]) => value?.kind === "event"),
       live.length,
     );
+    first!.forEach((item) => {
+      assert.isTrue(isTrustedLiveRpcFrame(item));
+    });
+    assert.isTrue(isTrustedLiveRpcFrame(reply));
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
+it.effect(
+  "live RPC encode skips schema checks on trusted frames and still rejects untrusted garbage",
+  () =>
+    Effect.sync(() => {
+      const garbage = {
+        kind: "event" as const,
+        sequence: 1,
+        event: { type: "not-a-domain-event" },
+      };
+      const codec = codecForSkippingTrustedLive(OrchestrationV2ThreadStreamItem);
+      const trusted = trustLiveRpcFrame({ ...garbage });
+      assert.strictEqual(Schema.encodeUnknownSync(codec)(trusted), trusted);
+      assert.throws(() => Schema.encodeUnknownSync(codec)(garbage));
+    }),
 );
 
 it.effect("shell snapshots omit idle children and older settled threads only on request", () =>

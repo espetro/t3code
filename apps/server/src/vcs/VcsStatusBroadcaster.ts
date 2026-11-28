@@ -34,10 +34,10 @@ import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import type * as GitVcsDriver from "./GitVcsDriver.ts";
+import type * as GitVcsDriver from "#t3/git-vcs-driver";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
 
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);

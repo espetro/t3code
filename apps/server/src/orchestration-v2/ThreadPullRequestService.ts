@@ -22,10 +22,10 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as GitManager from "../git/GitManager.ts";
-import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitManager from "#t3/git-manager";
+import * as GitVcsDriver from "#t3/git-vcs-driver";
 import * as ProjectStore from "./ProjectStore.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "#t3/pull-request-service";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -104,9 +104,8 @@ export function projectWorkspaceMatchesSnapshot(
   currentProject: Option.Option<Pick<OrchestrationProjectShell, "workspaceRoot">>,
   expectedWorkspaceRoot: string,
 ): boolean {
-  return (
-    Option.isSome(currentProject) && currentProject.value.workspaceRoot === expectedWorkspaceRoot
-  );
+  const project = Option.getOrUndefined(currentProject);
+  return project !== undefined && project.workspaceRoot === expectedWorkspaceRoot;
 }
 
 const BACKFILL_ATTEMPTS = 5;

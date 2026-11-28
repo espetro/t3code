@@ -107,7 +107,8 @@ export interface ProjectCommandState {
 }
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+const scriptIdValid = (id: string) =>
+  id.length > 0 && id.length <= MAX_SCRIPT_ID_LENGTH && /^[a-z0-9][a-z0-9-]*$/.test(id);
 
 /** Read state and commit the planned event under the project lock. */
 export function planProjectCommand(input: {
@@ -188,7 +189,7 @@ export function planProjectCommand(input: {
         // Allow editing or removing persisted invalid script ids, while rejecting new invalid ids.
         const existingIds = new Set(project.scripts.map((script) => script.id));
         for (const script of command.scripts) {
-          if (!existingIds.has(script.id) && !isScriptRunCommand(`script.${script.id}.run`)) {
+          if (!existingIds.has(script.id) && !scriptIdValid(script.id)) {
             return invariant(
               `Script IDs must be 1-${MAX_SCRIPT_ID_LENGTH} lowercase letters, digits or hyphens, starting with a letter or digit (got ${script.id.length} characters).`,
             );

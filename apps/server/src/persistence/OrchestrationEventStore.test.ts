@@ -69,6 +69,7 @@ layer("OrchestrationEventStore", (it) => {
         },
       };
       const [replayed] = yield* store.appendAgentEvents({ events: [event] });
+      assert.strictEqual(replayed!.event, event);
       const pull = yield* Stream.toPull(
         store.streamProjectedApplicationEvents({
           afterSequence,
@@ -76,15 +77,15 @@ layer("OrchestrationEventStore", (it) => {
         }),
       );
       assert.deepEqual(yield* pull, [{ sequence: replayed!.sequence, event: { threadId } }]);
+      const liveEvent = {
+        ...event,
+        id: EventId.make("event:large-shell-body:live"),
+        payload: { ...event.payload, status: "completed" as const, completedAt: now },
+      };
       const [live] = yield* store.appendAgentEvents({
-        events: [
-          {
-            ...event,
-            id: EventId.make("event:large-shell-body:live"),
-            payload: { ...event.payload, status: "completed", completedAt: now },
-          },
-        ],
+        events: [liveEvent],
       });
+      assert.strictEqual(live!.event, liveEvent);
       yield* store.publishCommitted([live!]);
       assert.deepEqual(yield* pull, [{ sequence: live!.sequence, event: { threadId } }]);
       const durable = yield* store
@@ -269,6 +270,9 @@ layer("OrchestrationEventStore", (it) => {
         appended.map((entry) => entry.event),
         events,
       );
+      appended.forEach((entry, index) => {
+        assert.strictEqual(entry.event, events[index]);
+      });
       const stored = yield* sql<{
         readonly prompt: string | null;
         readonly prompt_sequence: number | null;
@@ -303,6 +307,15 @@ layer("OrchestrationEventStore", (it) => {
       const now = DateTime.formatIso(occurredAt);
       const baselineSequence = yield* eventStore.latestApplicationSequence;
 
+      const projectPayload = {
+        projectId,
+        title: "Shared stream",
+        workspaceRoot: "/tmp/shared-stream",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      };
       const projectEvent = yield* eventStore.appendProjectEvent({
         type: "project.created",
         eventId: EventId.make("event-project-shared-stream"),
@@ -313,16 +326,12 @@ layer("OrchestrationEventStore", (it) => {
         causationEventId: null,
         correlationId: CommandId.make("command-project-shared-stream"),
         metadata: {},
-        payload: {
-          projectId,
-          title: "Shared stream",
-          workspaceRoot: "/tmp/shared-stream",
-          defaultModelSelection: null,
-          scripts: [],
-          createdAt: now,
-          updatedAt: now,
-        },
+        payload: projectPayload,
       });
+      assert.strictEqual(
+        projectEvent.type === "project.created" ? projectEvent.payload : undefined,
+        projectPayload,
+      );
       const [threadEvent] = yield* eventStore.appendAgentEvents({
         commandId: CommandId.make("command-thread-shared-stream"),
         events: [

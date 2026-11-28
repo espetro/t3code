@@ -32,7 +32,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
+import { errorTag, taggedError } from "./scriptcBindScope.ts";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
@@ -42,7 +42,7 @@ import {
   CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL,
 } from "./Adapters/ClaudeAdapterV2.ts";
 import { withTurnStartReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
-import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as GitWorkflowService from "#t3/git-workflow-service";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
@@ -240,12 +240,14 @@ function unsettledStoppedProviderTurn(
   return { run: previous, turn, nativeTurnId };
 }
 
-export const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
-const isProviderAdapterProtocolError = Schema.is(ProviderAdapter.ProviderAdapterProtocolError);
-const isProviderAdapterTurnStartError = Schema.is(ProviderAdapter.ProviderAdapterTurnStartError);
-const isProviderAdapterOpenSessionError = Schema.is(
-  ProviderAdapter.ProviderAdapterOpenSessionError,
-);
+export const isProviderTurnStartError = (error: unknown) =>
+  taggedError(error, "ProviderTurnStartError");
+const isProviderAdapterProtocolError = (error: unknown) =>
+  taggedError(error, "ProviderAdapterProtocolError");
+const isProviderAdapterTurnStartError = (error: unknown) =>
+  taggedError(error, "ProviderAdapterTurnStartError");
+const isProviderAdapterOpenSessionError = (error: unknown) =>
+  taggedError(error, "ProviderAdapterOpenSessionError");
 
 /**
  * Claude refuses these before it reads the prompt: replacing a process running background work,
@@ -261,20 +263,45 @@ const PROMPT_REFUSAL_TAGS = [
   "ClaudeMcpRegistrationTimeoutError",
 ] as const;
 
-const refusedBeforePrompt = (error: unknown): boolean =>
-  PROMPT_REFUSAL_TAGS.some((tag) => Predicate.isTagged(error, tag)) ||
-  (isProviderAdapterTurnStartError(error) && error.refusedBeforePrompt === true) ||
-  (isProviderAdapterProtocolError(error) &&
-    error.driver === CLAUDE_PROVIDER &&
-    error.detail === CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL) ||
-  (Predicate.hasProperty(error, "cause") && refusedBeforePrompt(error.cause));
+const refusedBeforePrompt = (error: unknown): boolean => {
+  const tag = errorTag(error);
+  if (tag !== undefined && PROMPT_REFUSAL_TAGS.some((entry) => entry === tag)) return true;
+  if (
+    isProviderAdapterTurnStartError(error) &&
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "refusedBeforePrompt") === true
+  ) {
+    return true;
+  }
+  if (
+    isProviderAdapterProtocolError(error) &&
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "driver") === CLAUDE_PROVIDER &&
+    Reflect.get(error, "detail") === CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL
+  ) {
+    return true;
+  }
+  if (typeof error === "object" && error !== null) {
+    const cause = Reflect.get(error, "cause");
+    if (cause !== undefined) return refusedBeforePrompt(cause);
+  }
+  return false;
+};
 
 // The provider may have acted on a request it never answered, so a retry could duplicate it.
 const OUTCOME_UNKNOWN_TAGS = ["CodexAppServerUnresponsiveError"] as const;
 
-const outcomeUnknown = (error: unknown): boolean =>
-  OUTCOME_UNKNOWN_TAGS.some((tag) => Predicate.isTagged(error, tag)) ||
-  (Predicate.hasProperty(error, "cause") && outcomeUnknown(error.cause));
+const outcomeUnknown = (error: unknown): boolean => {
+  const tag = errorTag(error);
+  if (tag !== undefined && OUTCOME_UNKNOWN_TAGS.some((entry) => entry === tag)) return true;
+  if (typeof error === "object" && error !== null) {
+    const cause = Reflect.get(error, "cause");
+    if (cause !== undefined) return outcomeUnknown(cause);
+  }
+  return false;
+};
 
 /**
  * Whether a non-truncating provider's native session lost the conversation kept before `run`.
@@ -333,9 +360,8 @@ export class ProviderTurnStartRunStateMissingError extends Schema.TaggedError<Pr
   },
 ) {}
 
-export const isProviderTurnStartRunStateMissingError = Schema.is(
-  ProviderTurnStartRunStateMissingError,
-);
+export const isProviderTurnStartRunStateMissingError = (error: unknown) =>
+  taggedError(error, "ProviderTurnStartRunStateMissingError");
 
 const RESUME_PROMPT = "Continue where you left off.";
 
@@ -1061,12 +1087,13 @@ export const layer: Layer.Layer<
       let providerTurns = projection.providerTurns;
       if (abandonedTurn !== undefined) {
         const liveSession = yield* providerSessions.get(providerSessionId);
-        if (Option.isSome(liveSession)) {
+        const liveSessionRuntime = Option.getOrUndefined(liveSession);
+        if (liveSessionRuntime !== undefined) {
           // The run already ended without stopping its provider — a failed start, an
           // ignored Stop, or an interrupt that never confirmed. Recover that exact
           // turn before reusing its native conversation.
           const recovered = yield* Effect.result(
-            liveSession.value.interruptTurn({
+            liveSessionRuntime.interruptTurn({
               providerThread,
               providerTurnId: abandonedTurn.id,
               requestRuntimeRestart: true,
@@ -2619,11 +2646,7 @@ export const layer: Layer.Layer<
       },
       (effect, input) =>
         effect.pipe(
-          Effect.mapError((cause) =>
-            isProviderTurnStartError(cause)
-              ? cause
-              : new ProviderTurnStartError({ runId: input.runId, cause }),
-          ),
+          Effect.mapError((cause) => new ProviderTurnStartError({ runId: input.runId, cause })),
         ),
     );
     return ProviderTurnStartServiceV2.of({
@@ -2665,11 +2688,7 @@ export const layer: Layer.Layer<
         },
         (effect, { runId }) =>
           effect.pipe(
-            Effect.mapError((cause) =>
-              isProviderTurnStartRunStateMissingError(cause)
-                ? cause
-                : new ProviderTurnStartError({ runId, cause }),
-            ),
+            Effect.mapError((cause) => new ProviderTurnStartError({ runId, cause })),
           ),
       ),
     });

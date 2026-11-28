@@ -12,7 +12,6 @@ import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scheduler from "effect/Scheduler";
@@ -145,12 +144,11 @@ const checkNodeSqliteCompat = Effect.fn("checkNodeSqliteCompat")(function () {
 
 // node:sqlite supplies errcode; classifySqliteError expects errno.
 const classifyError = (cause: unknown, message: string, operation: string) => {
-  if (
-    Predicate.hasProperty(cause, "errcode") &&
-    typeof cause.errcode === "number" &&
-    !Predicate.hasProperty(cause, "errno")
-  ) {
-    Object.assign(cause, { errno: cause.errcode });
+  const record: any = cause;
+  if (record !== null && typeof record === "object" && typeof record.errcode === "number") {
+    if (record.errno === undefined) {
+      record.errno = record.errcode;
+    }
   }
   return classifySqliteError(cause, { message, operation });
 };
@@ -158,14 +156,17 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
 // SQLite retains text/blob bindings until rebind or finalization; node:sqlite cannot clear them.
 const LARGE_BINDING_SIZE = 64 * 1024;
 
-const isBlob = (value: unknown): value is ArrayBufferView | ArrayBufferLike =>
+const isBlobLike = (value: unknown): boolean =>
   ArrayBuffer.isView(value) || NodeUtil.types.isAnyArrayBuffer(value);
 
 const bindingSize = (value: unknown): number => {
   if (typeof value === "string") {
     return value.length;
   }
-  return isBlob(value) ? value.byteLength : 0;
+  if (isBlobLike(value)) {
+    return (value as ArrayBufferView | ArrayBufferLike).byteLength;
+  }
+  return 0;
 };
 
 const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
@@ -175,13 +176,14 @@ const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
       if (
         (typeof param === "object" || typeof param === "function") &&
         param !== null &&
-        !isBlob(param)
+        !isBlobLike(param)
       ) {
         // Named parameters may be callable objects; read data properties only to avoid invoking getters twice.
         for (const property of Object.values(Object.getOwnPropertyDescriptors(param))) {
-          if (!property.enumerable) continue;
-          if (!("value" in property)) return true;
-          size += bindingSize(property.value);
+          const desc: any = property;
+          if (!desc.enumerable) continue;
+          if (desc.get !== undefined || desc.set !== undefined) return true;
+          size += bindingSize(desc.value);
         }
       } else {
         size += bindingSize(param);
@@ -196,112 +198,8 @@ const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
 // A reader refuses a database outside WAL mode with this code; retrying cannot change that.
 const NOT_WAL = "ERR_SQLITE_NOT_WAL";
 
-// Inline worker source also runs in bundles and single-executable builds without module files.
-const workerSource = `
-const { parentPort, workerData } = require("node:worker_threads");
-const { DatabaseSync } = require("node:sqlite");
-const describe = (error) => ({
-  message: String(error && error.message ? error.message : error),
-  code: error && error.code,
-  errcode: error && error.errcode,
-  errstr: error && error.errstr,
-});
-let db;
-try {
-  // A read-only open cannot be undone by SQL, unlike PRAGMA query_only.
-  const next = new DatabaseSync(workerData.filename, {
-    readOnly: workerData.readOnly,
-    allowExtension: workerData.allowExtension,
-  });
-  next.exec("PRAGMA busy_timeout = 5000;");
-  // Reads the header, so a file that is not a database fails here rather than on first use.
-  const mode = String(next.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();
-  // Without WAL a reader's shared lock blocks the writer's commits, so refuse.
-  if (workerData.requireWal && mode !== "wal") {
-    throw Object.assign(new Error("database uses journal_mode " + mode + ", not wal"), { code: ${JSON.stringify(NOT_WAL)} });
-  }
-  db = next;
-  parentPort.postMessage({ type: "ready" });
-} catch (error) {
-  parentPort.postMessage({ type: "unavailable", ...describe(error) });
-}
-const statements = new Map();
-const prepare = (sql, cached) => {
-  if (!cached) return db.prepare(sql);
-  let statement = statements.get(sql);
-  if (statement === undefined) {
-    statement = db.prepare(sql);
-    if (statements.size >= workerData.prepareCacheSize) statements.delete(statements.keys().next().value);
-  } else {
-    statements.delete(sql);
-  }
-  statements.set(sql, statement);
-  return statement;
-};
-parentPort.on("message", (request) => {
-  if (request.type === "close") {
-    // Closing lets SQLite checkpoint and remove the WAL, which terminating would skip.
-    try {
-      if (db !== undefined) db.close();
-    } catch {}
-    parentPort.close();
-    return;
-  }
-  const { id, sql, params, cached, values, raw, safeIntegers, received, savepoints } = request;
-  let operation = "open";
-  let iterator;
-  try {
-    if (db === undefined) throw new Error("database connection is unavailable");
-    operation = "execute";
-    for (const savepoint of savepoints) db.exec(savepoint);
-    operation = "prepare";
-    const statement = prepare(sql, cached);
-    operation = "execute";
-    statement.setReadBigInts(safeIntegers);
-    if (statement.columns().length > 0) {
-      statement.setReturnArrays(values);
-      let rows = [];
-      let bytes = 0;
-      let pendingBatch = false;
-      iterator = statement.iterate(...params);
-      for (const row of iterator) {
-        let rowBytes = 0;
-        for (const key in row) {
-          const value = row[key];
-          rowBytes += typeof value === "string" ? value.length * 2
-            : ArrayBuffer.isView(value) ? value.byteLength : 8;
-        }
-        if (rows.length > 0 && (rows.length >= 16384 || bytes + rowBytes > 8 * 1024 * 1024)) {
-          // Build the next batch during receipt, but allow only one unacknowledged message.
-          if (pendingBatch) Atomics.wait(received, 0, 0);
-          Atomics.store(received, 0, 0);
-          parentPort.postMessage({ id, rows, more: true });
-          rows = [];
-          bytes = 0;
-          pendingBatch = true;
-        }
-        rows.push(row);
-        bytes += rowBytes;
-      }
-      if (pendingBatch) Atomics.wait(received, 0, 0);
-      parentPort.postMessage({ id, rows });
-    } else {
-      // A discarded result is read as BigInt: see the same line in the in-process client.
-      if (!raw) statement.setReadBigInts(true);
-      const result = statement.run(...params);
-      parentPort.postMessage({ id, rows: raw ? result : [] });
-    }
-  } catch (error) {
-    // A step that throws leaves its statement active; an active write blocks every later COMMIT.
-    try {
-      iterator?.return();
-    } catch {}
-    // A failed iterator can report its previous SQLite error when the statement is reused.
-    statements.delete(sql);
-    parentPort.postMessage({ id, error: { operation, ...describe(error) } });
-  }
-});
-`;
+const queryWorkerUrl = new URL("./nodeSqliteQueryWorker.cjs", import.meta.url);
+const checkpointWorkerUrl = new URL("./nodeSqliteCheckpointWorker.cjs", import.meta.url);
 
 interface WorkerRequest {
   readonly sql: string;
@@ -353,6 +251,9 @@ const endsReadTransaction = (sql: string) => /^\s*ROLLBACK\b|^\s*COMMIT\b/i.test
 
 // WAL readers run concurrently; one worker serialized every read behind the slowest transaction.
 const READER_POOL_SIZE = 4;
+const READER_POOL_INDICES = [0, 1, 2, 3] as const;
+const scriptcNativeHost =
+  typeof process !== "undefined" && process.env.T3_SCRIPTC_NATIVE === "1";
 const READER_STARTUP_TIMEOUT = Duration.seconds(10);
 const READER_RETRY_DELAY = Duration.seconds(1);
 const READER_RETRY_MAX_DELAY = Duration.minutes(1);
@@ -380,8 +281,7 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
   let writerStopped: string | undefined;
 
   const start = () => {
-    const worker = new NodeWorkerThreads.Worker(workerSource, {
-      eval: true,
+    const worker = new NodeWorkerThreads.Worker(queryWorkerUrl, {
       workerData: {
         filename: options.filename,
         readOnly,
@@ -418,15 +318,15 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
       }
       pending.clear();
     };
-    worker.on("message", (reply: WorkerReply | WorkerStartup) => {
-      if ("type" in reply) {
+    worker.on("message", (reply: any) => {
+      if (reply.type !== undefined) {
         announce(reply);
         if (pending.size === 0) worker.unref();
         return;
       }
       const request = pending.get(reply.id);
       if (request === undefined) return;
-      if ("rows" in reply && reply.more) {
+      if (reply.rows !== undefined && reply.more) {
         for (const row of reply.rows) request.rows.push(row);
         Atomics.store(request.received, 0, 1);
         Atomics.notify(request.received, 0);
@@ -435,14 +335,18 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
       pending.delete(reply.id);
       if (pending.size === 0) worker.unref();
       options.onReply?.();
-      if ("rows" in reply && request.rows.length > 0) {
+      if (reply.rows !== undefined && request.rows.length > 0) {
         for (const row of reply.rows) request.rows.push(row);
         request.resume({ id: reply.id, rows: request.rows });
       } else {
         request.resume(reply);
       }
     });
-    worker.on("error", (cause) => stop(`${label} failed: ${cause.message}`));
+    worker.on("error", (cause: any) =>
+      stop(
+        `${label} failed: ${typeof cause?.message === "string" ? cause.message : String(cause)}`,
+      ),
+    );
     worker.on("exit", (code) => stop(`${label} exited with code ${code}`));
 
     const request = (input: WorkerRequest) =>
@@ -456,7 +360,7 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
             ? Effect.succeed([])
             : Effect.fail(failedWith({ message: stoppedMessage }, "execute"));
         }
-        const safeIntegers = Boolean(Context.get(fiber.context, Client.SafeIntegers));
+        const safeIntegers = fiber.getRef(Client.SafeIntegers) === true;
         const reply = Effect.callback<ReadonlyArray<any>, SqlError>((resume) => {
           const id = nextRequestId++;
           const received = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
@@ -464,9 +368,9 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
             endsTransaction,
             received,
             rows: [],
-            resume: (reply) =>
+            resume: (reply: any) =>
               resume(
-                "rows" in reply
+                reply.rows !== undefined
                   ? Effect.succeed(reply.rows)
                   : Effect.fail(failedWith(reply.error, reply.error.operation)),
               ),
@@ -514,8 +418,9 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
             return Effect.succeed([]);
           }
           const rollback = /^ROLLBACK TO SAVEPOINT (effect_sql_\d+)$/.exec(statement);
-          if (rollback !== null) {
-            const pending = pendingSavepoints.lastIndexOf(`SAVEPOINT ${rollback[1]}`);
+          const savepointName = rollback === null ? undefined : rollback[1];
+          if (savepointName !== undefined) {
+            const pending = pendingSavepoints.lastIndexOf(`SAVEPOINT ${savepointName}`);
             if (pending !== -1) {
               pendingSavepoints.splice(pending);
               return Effect.succeed([]);
@@ -574,7 +479,7 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
     const started = Effect.promise(() => entry.started);
     return Effect.flatMap(
       Effect.withFiber((fiber) => {
-        const restore = Context.get(fiber.context, ReadOnly) ?? identity;
+        const restore = fiber.getRef(ReadOnly) ?? identity;
         // Readers fall back to the writer; the writer has no fallback, so a slow disk only delays it.
         return restore(
           options.role === "reader"
@@ -583,8 +488,8 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
         );
       }),
       (startup): Effect.Effect<Connection, SqlError> => {
-        const outcome = Option.getOrUndefined(startup);
-        if (outcome?.type === "ready") {
+        const outcome: any = Option.getOrUndefined(startup);
+        if (outcome !== undefined && outcome.type === "ready") {
           // A late ready event must not hand out a worker retired by another acquire timeout.
           return current === entry
             ? Effect.succeed(entry.connection)
@@ -605,10 +510,10 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
 });
 
 const startFailure = (error: SqlError) => {
-  const cause = error.reason.cause;
+  const cause: any = error.reason.cause;
   return {
-    reason: cause instanceof Error ? cause.message : error.message,
-    permanent: Predicate.hasProperty(cause, "code") && cause.code === NOT_WAL,
+    reason: typeof cause?.message === "string" ? cause.message : error.message,
+    permanent: cause !== null && typeof cause === "object" && cause.code === NOT_WAL,
   };
 };
 
@@ -673,47 +578,6 @@ const CHECKPOINT_IDLE_MS = 100;
 // If checkpoints fall behind constant writes, the writer checkpoints itself, delaying writes only.
 const WRITER_BACKSTOP_FRAMES = 10_000;
 
-const checkpointWorkerSource = `
-const { parentPort, workerData } = require("node:worker_threads");
-const { DatabaseSync } = require("node:sqlite");
-let db;
-let frames;
-let passive;
-let idle;
-const check = (force) => {
-  if (db === undefined) {
-    db = new DatabaseSync(workerData.filename);
-    db.exec("PRAGMA busy_timeout = 5000;");
-    // macOS requires F_FULLFSYNC to flush the drive cache.
-    db.exec("PRAGMA checkpoint_fullfsync = ON;");
-    frames = db.prepare("PRAGMA wal_checkpoint(NOOP)");
-    passive = db.prepare("PRAGMA wal_checkpoint(PASSIVE)");
-  }
-  const before = frames.get();
-  let state = before;
-  if (state.log - state.checkpointed >= workerData.frames || (force && state.log > state.checkpointed)) {
-    passive.get();
-    state = frames.get();
-  }
-  // The WAL restarts only once every frame is checkpointed, so catch up when writes pause.
-  // A reader pinning the WAL stops progress; the next write retries instead of a timer loop.
-  const progressed = !force || state.checkpointed > before.checkpointed;
-  if (state.log > state.checkpointed && progressed) {
-    idle = setTimeout(() => run(true), workerData.idleMs);
-  }
-  parentPort.postMessage({ type: "checked", log: state.log, checkpointed: state.checkpointed });
-};
-const run = (force) => {
-  clearTimeout(idle);
-  try {
-    check(force);
-  } catch (error) {
-    parentPort.postMessage({ type: "failed", message: String(error && error.message ? error.message : error) });
-  }
-};
-parentPort.on("message", () => run(false));
-`;
-
 const sqliteVersion = () => {
   const db = new NodeSqlite.DatabaseSync(":memory:");
   try {
@@ -738,8 +602,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (filename: string) {
   }
   const started = Result.try(
     () =>
-      new NodeWorkerThreads.Worker(checkpointWorkerSource, {
-        eval: true,
+      new NodeWorkerThreads.Worker(checkpointWorkerUrl, {
         workerData: { filename, frames: CHECKPOINT_FRAMES, idleMs: CHECKPOINT_IDLE_MS },
       }),
   );
@@ -781,13 +644,198 @@ const startCheckpointWorker = Effect.fnUntraced(function* (filename: string) {
   };
 });
 
-const make = Effect.fn("makeWithDatabase")(function* (
-  options: SqliteClientConfig,
-): Effect.fn.Return<Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity> {
+interface ReaderSlot {
+  readonly acquire: Effect.Effect<Connection | undefined>;
+  readonly lock: Semaphore.Semaphore;
+  claimed: boolean;
+}
+
+interface ConnectionTarget {
+  readonly name: Acquired["connection"];
+  readonly lock: Semaphore.Semaphore;
+  readonly connection: Connection;
+}
+
+interface SqliteConnectionPool {
+  readonly readers: ReadonlyArray<ReaderSlot>;
+  readonly readerPool: { unavailable: boolean };
+  readonly readerAdmission: Semaphore.Semaphore;
+  readonly writer: Effect.Effect<ConnectionTarget, SqlError>;
+  activeWriter: ConnectionOwner | undefined;
+}
+
+const lockWaitAcquired = (
+  target: { readonly name: Acquired["connection"] },
+  clock: Clock.Clock,
+  start: bigint,
+): Acquired => ({
+  connection: target.name,
+  lockWaitMs: Number((clock.monotonicTimeNanosUnsafe() - start) / 1000n) / 1000,
+});
+
+const claimedUntilScopeCloses = (release: Effect.Effect<void>) =>
+  Effect.withFiber((fiber) =>
+    Scope.addFinalizer(Context.getUnsafe(fiber.context, Scope.Scope), release),
+  );
+
+const sqliteRoute = (
+  pool: SqliteConnectionPool,
+  claimed: (release: Effect.Effect<void>) => Effect.Effect<void>,
+  restore: typeof Effect.interruptible,
+): Effect.Effect<ConnectionTarget, SqlError> =>
+  Effect.withFiber((fiber): Effect.Effect<ConnectionTarget, SqlError> => {
+    if (
+      pool.readers.length === 0 ||
+      pool.readerPool.unavailable ||
+      fiber.getRef(ReadOnly) === undefined
+    ) {
+      return pool.writer;
+    }
+    const claim = Effect.andThen(
+      restore(pool.readerAdmission.take(1)),
+      Effect.suspend(() => {
+        const reader = pool.readers.find((slot) => !slot.claimed)!;
+        reader.claimed = true;
+        const release = Effect.andThen(
+          Effect.sync(() => {
+            reader.claimed = false;
+          }),
+          pool.readerAdmission.release(1),
+        );
+        return Effect.as(claimed(release), reader);
+      }),
+    );
+    return Effect.flatMap(
+      Effect.provideService(claim, Scheduler.PreventSchedulerYield, true),
+      (reader) =>
+        Effect.flatMap(
+          Effect.provideService(reader.acquire, ReadOnly, restore),
+          (readerConnection) =>
+            readerConnection === undefined
+              ? pool.writer
+              : Effect.succeed<ConnectionTarget>({
+                  name: "reader",
+                  lock: reader.lock,
+                  connection: readerConnection,
+                }),
+        ),
+    );
+  });
+
+const sqliteBorrowTarget = <A, E, R>(
+  pool: SqliteConnectionPool,
+  target: ConnectionTarget,
+  use: (connection: Connection) => Effect.Effect<A, E, R>,
+  start: bigint,
+): Effect.Effect<A, E, R> =>
+  Effect.withFiber((fiber) => {
+    const clock = fiber.getRef(Clock.Clock);
+    const ownerAtWaitStart = target.name === "writer" ? pool.activeWriter : undefined;
+    const owner = target.name === "writer" ? connectionOwner(fiber) : undefined;
+    const useConnection = Effect.suspend(() => {
+      if (target.name === "writer") pool.activeWriter = owner;
+      if (
+        fiber.getRef(References.TracerEnabled) &&
+        fiber.getRef(Statement.SpanPropagationEnabled)
+      ) {
+        annotateAcquired(fiber, lockWaitAcquired(target, clock, start), ownerAtWaitStart);
+      }
+      return use(target.connection);
+    });
+    const useOwnedConnection =
+      target.name === "writer"
+        ? Effect.onExit(useConnection, () =>
+            Effect.sync(() => {
+              if (pool.activeWriter === owner) pool.activeWriter = undefined;
+            }),
+          )
+        : useConnection;
+    return target.lock.withPermits(1)(useOwnedConnection);
+  });
+
+const makeSqliteBorrower =
+  (pool: SqliteConnectionPool): Borrower =>
+  (use) =>
+    Effect.uninterruptibleMask((restore) => {
+      let release: Effect.Effect<void> = Effect.void;
+      const claimed = (next: Effect.Effect<void>) =>
+        Effect.sync(() => {
+          release = next;
+        });
+      return Effect.withFiber((fiber) => {
+        const start = fiber.getRef(Clock.Clock).monotonicTimeNanosUnsafe();
+        return Effect.flatMap(sqliteRoute(pool, claimed, restore), (target) =>
+          restore(sqliteBorrowTarget(pool, target, use, start)),
+        );
+      }).pipe(Effect.ensuring(Effect.suspend(() => release)));
+    });
+
+const makeSqliteTransactionAcquirer = (
+  pool: SqliteConnectionPool,
+): Effect.Effect<Connection, SqlError, Scope.Scope> =>
+  Effect.uninterruptibleMask((maskRestore) =>
+    Effect.withFiber((fiber) => {
+      const start = fiber.getRef(Clock.Clock).monotonicTimeNanosUnsafe();
+      const pending = fiber.getRef(TransactionAcquire);
+      const restore = pending?.restore ?? maskRestore;
+      return Effect.flatMap(sqliteRoute(pool, claimedUntilScopeCloses, restore), (target) => {
+        const scope = Context.getUnsafe(fiber.context, Scope.Scope);
+        const clock = fiber.getRef(Clock.Clock);
+        const ownerAtWaitStart = target.name === "writer" ? pool.activeWriter : undefined;
+        const owner = target.name === "writer" ? connectionOwner(fiber) : undefined;
+        const acquire = Effect.tap(restore(target.lock.take(1)), () => {
+          if (target.name === "writer") pool.activeWriter = owner;
+          if (pending !== undefined) {
+            pending.acquired = lockWaitAcquired(target, clock, start);
+            pending.ownerAtWaitStart = ownerAtWaitStart;
+          }
+          return Scope.addFinalizer(
+            scope,
+            Effect.sync(() => {
+              if (target.name === "writer" && pool.activeWriter === owner) {
+                pool.activeWriter = undefined;
+              }
+            }).pipe(Effect.andThen(target.lock.release(1))),
+          );
+        });
+        return Effect.as(
+          Effect.provideService(acquire, Scheduler.PreventSchedulerYield, true),
+          target.connection,
+        );
+      });
+    }),
+  );
+
+const makeSqliteWithTransaction =
+  (
+    withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | SqlError, R>,
+  ) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError, R> =>
+    Effect.uninterruptibleMask((restore) => {
+      const pending: {
+        acquired?: Acquired;
+        ownerAtWaitStart: ConnectionOwner | undefined;
+        restore: typeof Effect.interruptible | undefined;
+      } = {
+        ownerAtWaitStart: undefined,
+        restore,
+      };
+      const body = Effect.withFiber<A, E, R>((fiber) => {
+        annotateAcquired(fiber, pending.acquired, pending.ownerAtWaitStart);
+        pending.restore = undefined;
+        return effect;
+      });
+      return restore(
+        withTransaction(body).pipe(Effect.provideService(TransactionAcquire, pending)),
+      );
+    });
+
+const make = Effect.fn("makeWithDatabase")(function* (options: SqliteClientConfig) {
   yield* checkNodeSqliteCompat();
 
   const compiler = Statement.makeCompilerSqlite();
   const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
+  const enableWorkerPools = !scriptcNativeHost && isFileDatabase;
 
   const makeConnection = Effect.gen(function* () {
     const scope = yield* Effect.scope;
@@ -850,7 +898,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
         let arrays = false;
         let result: Exit.Exit<ReadonlyArray<unknown>, SqlError>;
         try {
-          statement.setReadBigInts(Boolean(Context.get(fiber.context, Client.SafeIntegers)));
+          statement.setReadBigInts(fiber.getRef(Client.SafeIntegers) === true);
           if (hasRows(statement)) {
             arrays = mode === "values";
             if (arrays) statement.setReturnArrays(true);
@@ -927,7 +975,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const writerWorker = options.writerWorker === true && isFileDatabase;
+  const writerWorker = options.writerWorker === true && enableWorkerPools;
   let checkpointAfterWrite: (() => void) | undefined;
   const writerConnection: Effect.Effect<Connection, SqlError> = writerWorker
     ? yield* makeWorkerConnection({
@@ -952,8 +1000,8 @@ const make = Effect.fn("makeWithDatabase")(function* (
   }
   const readerPool = { unavailable: false };
   const readers =
-    options.readerWorker && isFileDatabase
-      ? yield* Effect.forEach(Array.from({ length: READER_POOL_SIZE }), () =>
+    options.readerWorker && enableWorkerPools
+      ? yield* Effect.forEach(READER_POOL_INDICES, () =>
           Effect.map(
             Effect.all([makeReader(options.filename, readerPool), Semaphore.make(1)]),
             ([acquire, lock]) => ({
@@ -967,149 +1015,19 @@ const make = Effect.fn("makeWithDatabase")(function* (
   // One permit per slot, so a queued read waits for any reader, not one it picked while all were busy.
   const readerAdmission = yield* Semaphore.make(readers.length);
 
-  interface Target {
-    readonly name: Acquired["connection"];
-    readonly lock: Semaphore.Semaphore;
-    readonly connection: Connection;
-  }
-  const writer = Effect.map(writerConnection, (connection): Target => ({
-    name: "writer",
-    lock: semaphore,
-    connection,
-  }));
-  let activeWriter: ConnectionOwner | undefined;
-  // Callers must run route uninterruptibly and pass `claimed` a finalizer that runs `release` once.
-  // Waits use the caller's `restore`, not readOnly's, which may have been captured outside a mask.
-  const route = (
-    claimed: (release: Effect.Effect<void>) => Effect.Effect<void>,
-    restore: typeof Effect.interruptible,
-  ) =>
-    Effect.withFiber((fiber): Effect.Effect<Target, SqlError> => {
-      if (readers.length === 0 || readerPool.unavailable || !Context.get(fiber.context, ReadOnly)) {
-        return writer;
-      }
-      const claim = Effect.andThen(
-        restore(readerAdmission.take(1)),
-        Effect.suspend(() => {
-          // Holding a permit leaves a slot idle; the lowest wins, so idle slots never start a worker.
-          const reader = readers.find((slot) => !slot.claimed)!;
-          reader.claimed = true;
-          const release = Effect.andThen(
-            Effect.sync(() => {
-              reader.claimed = false;
-            }),
-            readerAdmission.release(1),
-          );
-          return Effect.as(claimed(release), reader);
-        }),
-      );
-      return Effect.flatMap(
-        // A scheduler yield after taking the permit must not precede its release finalizer.
-        Effect.provideService(claim, Scheduler.PreventSchedulerYield, true),
-        (reader) =>
-          Effect.flatMap(
-            Effect.provideService(reader.acquire, ReadOnly, restore),
-            (readerConnection) =>
-              readerConnection === undefined
-                ? writer
-                : Effect.succeed<Target>({
-                    name: "reader",
-                    lock: reader.lock,
-                    connection: readerConnection,
-                  }),
-          ),
-      );
-    });
-
-  const acquired = (
-    target: { readonly name: Acquired["connection"] },
-    clock: Clock.Clock,
-    start: bigint,
-  ): Acquired => ({
-    connection: target.name,
-    lockWaitMs: Number((clock.monotonicTimeNanosUnsafe() - start) / 1000n) / 1000,
-  });
-
-  const borrower: Borrower = (use) =>
-    Effect.uninterruptibleMask((restore) => {
-      let release: Effect.Effect<void> = Effect.void;
-      const claimed = (next: Effect.Effect<void>) =>
-        Effect.sync(() => {
-          release = next;
-        });
-      // Started before routing, so lock wait includes waiting for reader admission.
-      return Effect.withFiber((fiber) => {
-        const start = fiber.getRef(Clock.Clock).monotonicTimeNanosUnsafe();
-        return Effect.flatMap(route(claimed, restore), (target) =>
-          restore(borrowTarget(target, use, start)),
-        );
-      }).pipe(Effect.ensuring(Effect.suspend(() => release)));
-    });
-  const borrowTarget = <A, E, R>(
-    target: Target,
-    use: (connection: Connection) => Effect.Effect<A, E, R>,
-    start: bigint,
-  ): Effect.Effect<A, E, R> =>
-    Effect.withFiber((fiber) => {
-      const clock = fiber.getRef(Clock.Clock);
-      const ownerAtWaitStart = target.name === "writer" ? activeWriter : undefined;
-      const owner = target.name === "writer" ? connectionOwner(fiber) : undefined;
-      const useConnection = Effect.suspend(() => {
-        if (target.name === "writer") activeWriter = owner;
-        if (
-          fiber.getRef(References.TracerEnabled) &&
-          fiber.getRef(Statement.SpanPropagationEnabled)
-        ) {
-          annotateAcquired(fiber, acquired(target, clock, start), ownerAtWaitStart);
-        }
-        return use(target.connection);
-      });
-      const useOwnedConnection =
-        target.name === "writer"
-          ? Effect.onExit(useConnection, () =>
-              Effect.sync(() => {
-                if (activeWriter === owner) activeWriter = undefined;
-              }),
-            )
-          : useConnection;
-      return target.lock.withPermits(1)(useOwnedConnection);
-    });
-  const claimedUntilScopeCloses = (release: Effect.Effect<void>) =>
-    Effect.withFiber((fiber) =>
-      Scope.addFinalizer(Context.getUnsafe(fiber.context, Scope.Scope), release),
-    );
-  // Started before routing, so lock wait includes waiting for reader admission.
-  const transactionAcquirer = Effect.uninterruptibleMask((maskRestore) =>
-    Effect.withFiber((fiber) => {
-      const start = fiber.getRef(Clock.Clock).monotonicTimeNanosUnsafe();
-      const pending = fiber.getRef(TransactionAcquire);
-      const restore = pending?.restore ?? maskRestore;
-      return Effect.flatMap(route(claimedUntilScopeCloses, restore), (target) => {
-        const scope = Context.getUnsafe(fiber.context, Scope.Scope);
-        const clock = fiber.getRef(Clock.Clock);
-        const ownerAtWaitStart = target.name === "writer" ? activeWriter : undefined;
-        const owner = target.name === "writer" ? connectionOwner(fiber) : undefined;
-        const acquire = Effect.tap(restore(target.lock.take(1)), () => {
-          if (target.name === "writer") activeWriter = owner;
-          if (pending !== undefined) {
-            pending.acquired = acquired(target, clock, start);
-            pending.ownerAtWaitStart = ownerAtWaitStart;
-          }
-          return Scope.addFinalizer(
-            scope,
-            Effect.sync(() => {
-              if (target.name === "writer" && activeWriter === owner) activeWriter = undefined;
-            }).pipe(Effect.andThen(target.lock.release(1))),
-          );
-        });
-        return Effect.as(
-          // A scheduler yield after taking the permit must not precede its release finalizer.
-          Effect.provideService(acquire, Scheduler.PreventSchedulerYield, true),
-          target.connection,
-        );
-      });
-    }),
-  );
+  const pool: SqliteConnectionPool = {
+    readers,
+    readerPool,
+    readerAdmission,
+    writer: Effect.map(writerConnection, (connection): ConnectionTarget => ({
+      name: "writer",
+      lock: semaphore,
+      connection,
+    })),
+    activeWriter: undefined,
+  };
+  const borrower = makeSqliteBorrower(pool);
+  const transactionAcquirer = makeSqliteTransactionAcquirer(pool);
 
   const client = yield* Client.make({
     driver: "node:sqlite",
@@ -1124,28 +1042,8 @@ const make = Effect.fn("makeWithDatabase")(function* (
       [ATTR_DB_SYSTEM_NAME, "sqlite"],
     ],
   });
-  const withTransaction = client.withTransaction;
   return Object.assign(client, {
-    withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.uninterruptibleMask((restore) => {
-        // SqlClient masks setup; acquisition must preserve the caller's interruptibility.
-        const pending: {
-          acquired?: Acquired;
-          ownerAtWaitStart: ConnectionOwner | undefined;
-          restore: typeof Effect.interruptible | undefined;
-        } = {
-          ownerAtWaitStart: undefined,
-          restore,
-        };
-        const body = Effect.withFiber<A, E, R>((fiber) => {
-          annotateAcquired(fiber, pending.acquired, pending.ownerAtWaitStart);
-          pending.restore = undefined;
-          return effect;
-        });
-        return restore(
-          withTransaction(body).pipe(Effect.provideService(TransactionAcquire, pending)),
-        );
-      }),
+    withTransaction: makeSqliteWithTransaction(client.withTransaction),
   });
 });
 

@@ -582,9 +582,7 @@ export function isActiveRun(run: OrchestrationV2Run): boolean {
   return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
 }
 
-export function isTerminalRunStatus(
-  status: OrchestrationV2Run["status"],
-): status is ThreadManagementTerminalRunStatus {
+export function isTerminalRunStatus(status: OrchestrationV2Run["status"]): boolean {
   return (
     status === "completed" ||
     status === "failed" ||
@@ -639,7 +637,6 @@ function latestSteerableRun(
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
 const FORCE_STOP_REASON = "Force stopped by user";
 const FORCE_STOP_RELEASE_WAIT = "10 seconds";
-const isForceStopThreadError = Schema.is(OrchestrationV2ForceStopThreadError);
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -999,13 +996,13 @@ const make = Effect.gen(function* () {
       message?.runId === null || message?.runId === undefined
         ? undefined
         : projection.runs.find((candidate) => candidate.id === message.runId);
-    const turnItem =
-      projection.turnItems.find(
-        (
-          candidate,
-        ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> =>
-          candidate.type === "user_message" && candidate.messageId === input.messageId,
-      ) ?? null;
+    let turnItem: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> | null = null;
+    for (const candidate of projection.turnItems) {
+      if (candidate.type === "user_message" && candidate.messageId === input.messageId) {
+        turnItem = candidate;
+        break;
+      }
+    }
     if (
       message === undefined ||
       run === undefined ||
@@ -1048,7 +1045,8 @@ const make = Effect.gen(function* () {
       .getByCommandId(input.commandId)
       .pipe(Effect.orElseSucceed(() => Option.none()));
     const anyRun = records.runs[0];
-    if (Option.isSome(receipt) && receipt.value.status === "accepted" && anyRun !== undefined) {
+    const receiptValue = Option.getOrUndefined(receipt);
+    if (receiptValue !== undefined && receiptValue.status === "accepted" && anyRun !== undefined) {
       const replayed = yield* orchestrator.dispatch({
         type: "run.output.submit",
         commandId: input.commandId,
@@ -1088,11 +1086,15 @@ const make = Effect.gen(function* () {
       });
     }
     const checked = yield* checkOutput(run.outputSchema, input.json);
-    if (Result.isFailure(checked)) {
+    const checkedOutput = Result.match(checked, {
+      onFailure: (failure) => ({ failure }) as const,
+      onSuccess: (success) => ({ success }) as const,
+    });
+    if ("failure" in checkedOutput) {
       return yield* new ThreadManagementRunOutputRejectedError({
         threadId: input.threadId,
-        problem: checked.failure.problem,
-        ...(checked.failure.cause === undefined ? {} : { cause: checked.failure.cause }),
+        problem: checkedOutput.failure.problem,
+        ...(checkedOutput.failure.cause === undefined ? {} : { cause: checkedOutput.failure.cause }),
       });
     }
     yield* dispatch({
@@ -1100,7 +1102,7 @@ const make = Effect.gen(function* () {
       commandId: input.commandId,
       threadId: input.threadId,
       runId: run.id,
-      value: checked.success,
+      value: checkedOutput.success,
     });
     return { runId: run.id };
   });
@@ -1241,7 +1243,8 @@ const make = Effect.gen(function* () {
       Effect.timeoutOption(Duration.millis(Math.max(1, input.timeoutMs))),
     );
     const waited = Option.flatten(yield* wait);
-    if (Option.isSome(waited)) return settledResult(waited.value);
+    const waitedResult = Option.getOrUndefined(waited);
+    if (waitedResult !== undefined) return settledResult(waitedResult);
     // The run may have reached a terminal status while the timeout was
     // winning the race; the final projection read decides what actually
     // happened, so only a still-active run counts as timed out.
@@ -1404,12 +1407,17 @@ const make = Effect.gen(function* () {
         runId: input.runId,
       });
     }
-    if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
+    if (
+      explicitRun !== undefined &&
+      (explicitRun.status === "completed" ||
+        explicitRun.status === "failed" ||
+        explicitRun.status === "cancelled" ||
+        explicitRun.status === "interrupted" ||
+        explicitRun.status === "rolled_back")
+    ) {
       return {
         type: "already_terminal",
-        run: explicitRun as OrchestrationV2Run & {
-          readonly status: ThreadManagementTerminalRunStatus;
-        },
+        run: explicitRun,
       } as const;
     }
     if (explicitRun?.status === "queued") {
@@ -1597,9 +1605,10 @@ const make = Effect.gen(function* () {
         const released = yield* Fiber.join(release.fiber).pipe(
           Effect.timeoutOption(FORCE_STOP_RELEASE_WAIT),
         );
-        if (Option.isNone(released)) {
+        const releaseFinished = Option.getOrUndefined(released);
+        if (releaseFinished === undefined) {
           releasing = true;
-        } else if (!released.value && !(yield* laterRunActive(release.providerSessionId))) {
+        } else if (!releaseFinished && !(yield* laterRunActive(release.providerSessionId))) {
           shared = true;
           yield* detach(release.providerSessionId);
         }
@@ -1611,10 +1620,8 @@ const make = Effect.gen(function* () {
     },
     (effect, input) =>
       effect.pipe(
-        Effect.mapError((cause) =>
-          isForceStopThreadError(cause)
-            ? cause
-            : new OrchestrationV2ForceStopThreadError({ threadId: input.threadId, cause }),
+        Effect.mapError(
+          (cause) => new OrchestrationV2ForceStopThreadError({ threadId: input.threadId, cause }),
         ),
       ),
   );
@@ -1683,14 +1690,15 @@ const make = Effect.gen(function* () {
               new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
           ),
         );
-      if (Option.isNone(runtime)) {
+      const runtimeSession = Option.getOrUndefined(runtime);
+      if (runtimeSession === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
-      if (runtime.value.stopTask === undefined) {
+      if (runtimeSession.stopTask === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
       }
       // Bounded so a provider that never answers cannot hold the thread lock.
-      yield* runtime.value.stopTask({ providerThread, taskId }).pipe(
+      yield* runtimeSession.stopTask({ providerThread, taskId }).pipe(
         Effect.timeout("15 seconds"),
         Effect.mapError(
           (cause) =>
@@ -1728,16 +1736,17 @@ const make = Effect.gen(function* () {
     const runtime = yield* sessions
       .get(providerThread.providerSessionId)
       .pipe(Effect.mapError(unavailable));
-    if (Option.isNone(runtime)) {
+    const runtimeSession = Option.getOrUndefined(runtime);
+    if (runtimeSession === undefined) {
       return yield* unavailable();
     }
-    if (runtime.value.awaitBackgroundTasks === undefined) {
+    if (runtimeSession.awaitBackgroundTasks === undefined) {
       return yield* new ThreadManagementBackgroundWaitError({
         threadId: input.threadId,
         reason: "unsupported",
       });
     }
-    const { matched } = yield* runtime.value
+    const { matched } = yield* runtimeSession
       .awaitBackgroundTasks({ providerThread, taskIds: input.taskIds, awaited: input.awaited })
       .pipe(
         Effect.timeout("15 seconds"),

@@ -861,3 +861,15 @@ it.live.each([
     ).toEqual(expected);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it.effect("skips the native finder on a scriptc host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const create = vi.spyOn(FileFinder, "create");
+      const searchIndex = yield* WorkspaceSearchIndex.make("/workspace/project");
+      const result = yield* searchIndex.search("report", 50, "file");
+      expect(create).not.toHaveBeenCalled();
+      expect(result.entries).toEqual([]);
+    }),
+  ).pipe(Effect.provide(testLayer), Effect.provideService(HostProcess.IsExecutable, true)),
+);
