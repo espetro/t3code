@@ -31,6 +31,14 @@ const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
     from: NodePath.join(srcDir, "provider", "cursorSdkWorker.ts"),
     to: NodePath.join(serverDir, "dist", "cursor-sdk-worker.ts"),
   },
+  {
+    from: NodePath.join(repoRoot, "packages/shared/src/nodeSqliteQueryWorker.cjs"),
+    to: NodePath.join(serverDir, "dist", "nodeSqliteQueryWorker.cjs"),
+  },
+  {
+    from: NodePath.join(repoRoot, "packages/shared/src/nodeSqliteCheckpointWorker.cjs"),
+    to: NodePath.join(serverDir, "dist", "nodeSqliteCheckpointWorker.cjs"),
+  },
 ];
 
 type SchemaBarrel = {
@@ -332,6 +340,11 @@ async function main(): Promise<number> {
             ...schemaPaths,
           },
         },
+        files: [
+          compileFile,
+          "../../../packages/shared/src/nodeSqliteQueryWorker.cjs",
+          "../../../packages/shared/src/nodeSqliteCheckpointWorker.cjs",
+        ],
         include: [compileFile],
         exclude: [
           "**/*.test.ts",
