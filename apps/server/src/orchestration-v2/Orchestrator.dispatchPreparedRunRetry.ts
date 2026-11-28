@@ -235,7 +235,6 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindDispatchPreparedRunRetry = (ctx: any) =>
   Effect.fn("Orchestrator.dispatchPreparedRunRetry")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.retry" }>,
@@ -256,12 +255,17 @@ export const bindDispatchPreparedRunRetry = (ctx: any) =>
       { turnItemTypes: ["command_execution", "error"], turnItemRunId: command.runId },
     );
     const state = preparedRunState(command, projection);
-    const failureItem = projection.turnItems.find(
-      (candidate): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "error" }> =>
+    let failureItem: Extract<OrchestrationV2TurnItem, { readonly type: "error" }> | undefined;
+    for (const candidate of projection.turnItems) {
+      if (
         candidate.type === "error" &&
         candidate.status === "failed" &&
-        candidate.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
-    );
+        candidate.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
+      ) {
+        failureItem = candidate;
+        break;
+      }
+    }
     if (
       state === null ||
       state.run.workspacePreparation === undefined ||

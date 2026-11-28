@@ -236,7 +236,6 @@ import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindStartNextQueuedRunOnce = (ctx: any) => {
   const { failQueuedRunStart } = pickScriptcBindCtx(ctx);
   return Effect.fn("Orchestrator.startNextQueuedRun")(
@@ -466,14 +465,19 @@ export const bindStartNextQueuedRunOnce = (ctx: any) => {
 
       const rootNode = projection.nodes.find((candidate) => candidate.id === rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === attemptId);
-      const legacyQueuedTurnItem = projection.turnItems.find(
-        (
-          candidate,
-        ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> =>
+      let legacyQueuedTurnItem:
+        | Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }>
+        | undefined;
+      for (const candidate of projection.turnItems) {
+        if (
           candidate.type === "user_message" &&
           candidate.runId === queuedRun.id &&
-          candidate.messageId === queuedRun.userMessageId,
-      );
+          candidate.messageId === queuedRun.userMessageId
+        ) {
+          legacyQueuedTurnItem = candidate;
+          break;
+        }
+      }
       const storedProviderThread = projection.providerThreads.find(
         (candidate) => candidate.id === providerThreadId,
       );
@@ -1197,7 +1201,7 @@ export const bindStartNextQueuedRunOnce = (ctx: any) => {
         ],
       );
     },
-    (effect, threadId, options?) =>
+    (effect, threadId, options) =>
       effect.pipe(
         Effect.catch((cause) => failQueuedRunStart(threadId, cause, options?.queuedRunId)),
       ),

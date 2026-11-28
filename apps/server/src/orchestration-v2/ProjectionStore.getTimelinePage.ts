@@ -139,7 +139,6 @@ import {
 } from "./threadHistoryPaging.ts";
 import { routineSpan } from "@t3tools/shared/observability";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindGetTimelinePage = (ctx: any) => {
   return ((...args: any[]) => {
     const {
@@ -271,13 +270,7 @@ export const bindGetTimelinePage = (ctx: any) => {
             return { items, totalItems, hasMore, hasEarlier };
           }),
         )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
     return typeof __fn === "function" ? __fn(...args) : __fn;
   }) as any;
 };

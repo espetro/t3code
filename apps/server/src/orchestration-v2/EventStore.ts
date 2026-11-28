@@ -41,11 +41,7 @@ export class EventStoreReadEventsError extends Schema.TaggedError<EventStoreRead
   }
 }
 
-export const EventStoreV2Error = Schema.Union([
-  EventStoreAppendEventsError,
-  EventStoreReadEventsError,
-]);
-export type EventStoreV2Error = typeof EventStoreV2Error.Type;
+export type EventStoreV2Error = EventStoreAppendEventsError | EventStoreReadEventsError;
 
 export interface EventStoreV2Shape {
   readonly append: (input: {

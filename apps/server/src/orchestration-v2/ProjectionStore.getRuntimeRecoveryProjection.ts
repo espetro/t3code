@@ -141,7 +141,6 @@ import { routineSpan } from "@t3tools/shared/observability";
 
 import type { PayloadRow, ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindGetRuntimeRecoveryProjection = (ctx: any) => {
   const { isProjectionStoreThreadNotFoundError, ProjectionStoreReadError } =
     pickScriptcBindCtx(ctx);
@@ -500,12 +499,6 @@ export const bindGetRuntimeRecoveryProjection = (ctx: any) => {
       } satisfies ProjectionRuntimeRecoveryState;
     },
     (effect, threadId) =>
-      effect.pipe(
-        Effect.mapError((cause) =>
-          isProjectionStoreThreadNotFoundError(cause)
-            ? cause
-            : new ProjectionStoreReadError({ threadId, cause }),
-        ),
-      ),
+      effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
   );
 };

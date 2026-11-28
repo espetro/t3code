@@ -8,8 +8,14 @@ import * as SchemaGetter from "effect/SchemaGetter";
  */
 type JsonObject = { [key: string]: unknown };
 
-const isObject = (value: unknown): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const asJsonObject = (value: unknown): JsonObject | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: JsonObject = {};
+  for (const key of Object.keys(value)) {
+    out[key] = Reflect.get(value, key);
+  }
+  return out;
+};
 const isIdKey = (key: string) => key === "id" || key.endsWith("Id");
 const isIdListKey = (key: string) => key.endsWith("Ids");
 
@@ -30,24 +36,31 @@ function internRecordIds(container: JsonObject, ids: Array<string | number>): Js
     const out: JsonObject = {};
     for (const key in record) {
       const value = record[key];
-      out[key] = isIdKey(key)
-        ? ref(value)
-        : isIdListKey(key) && Array.isArray(value)
-          ? value.map(ref)
-          : key === "item" && isObject(value)
-            ? internRecord(value)
-            : value;
+      const item = asJsonObject(value);
+      if (isIdKey(key)) {
+        out[key] = ref(value);
+      } else if (isIdListKey(key) && Array.isArray(value)) {
+        out[key] = value.map(ref);
+      } else if (key === "item" && item !== undefined) {
+        out[key] = internRecord(item);
+      } else {
+        out[key] = value;
+      }
     }
     return out;
   };
   const out: JsonObject = {};
   for (const key in container) {
     const value = container[key];
-    out[key] = Array.isArray(value)
-      ? value.map((record) => (isObject(record) ? internRecord(record) : record))
-      : isObject(value)
-        ? internRecord(value)
-        : value;
+    if (Array.isArray(value)) {
+      out[key] = value.map((record) => {
+        const object = asJsonObject(record);
+        return object === undefined ? record : internRecord(object);
+      });
+    } else {
+      const object = asJsonObject(value);
+      out[key] = object === undefined ? value : internRecord(object);
+    }
   }
   return out;
 }
@@ -66,17 +79,31 @@ function expandRecordIds(container: JsonObject, ids: ReadonlyArray<unknown>): vo
             if (typeof entry === "number") value[i] = ids[entry];
           }
         }
-      } else if (key === "item" && isObject(value)) {
-        expandRecord(value);
+      } else {
+        const item = asJsonObject(value);
+        if (key === "item" && item !== undefined) {
+          expandRecord(item);
+          record[key] = item;
+        }
       }
     }
   };
   for (const key in container) {
     const value = container[key];
     if (Array.isArray(value)) {
-      for (const record of value) if (isObject(record)) expandRecord(record);
-    } else if (isObject(value)) {
-      expandRecord(value);
+      for (let i = 0; i < value.length; i++) {
+        const object = asJsonObject(value[i]);
+        if (object !== undefined) {
+          expandRecord(object);
+          value[i] = object;
+        }
+      }
+    } else {
+      const object = asJsonObject(value);
+      if (object !== undefined) {
+        expandRecord(object);
+        container[key] = object;
+      }
     }
   }
 }
@@ -101,24 +128,28 @@ export const withRecordIdTable = <S extends Schema.Top>(
   return ParsedJson.pipe(
     Schema.decodeTo(codec, {
       decode: SchemaGetter.transform((raw: unknown): Encoded => {
-        if (!isObject(raw) || !Array.isArray(raw.ids)) return raw as Encoded;
+        const object = asJsonObject(raw);
+        if (object === undefined || !Array.isArray(object.ids)) return raw as Encoded;
         // Consumed on the parsed object itself, so decoding it again is a no-op.
-        const ids: ReadonlyArray<unknown> = raw.ids;
-        delete raw.ids;
-        const key = container(raw);
-        const target = key === null ? raw : key === undefined ? undefined : raw[key];
-        if (isObject(target)) expandRecordIds(target, ids);
-        return raw as Encoded;
+        const ids: ReadonlyArray<unknown> = object.ids;
+        delete object.ids;
+        const key = container(object);
+        const target = key === null ? object : key === undefined ? undefined : object[key];
+        const targetObject = asJsonObject(target);
+        if (targetObject !== undefined) expandRecordIds(targetObject, ids);
+        return object as Encoded;
       }),
       encode: SchemaGetter.transform((encoded: Encoded): unknown => {
-        if (!isObject(encoded) || encoded.idTable !== true) return encoded;
-        const { idTable: _idTable, ...rest } = encoded;
+        const object = asJsonObject(encoded);
+        if (object === undefined || object.idTable !== true) return encoded;
+        const { idTable: _idTable, ...rest } = object;
         const key = container(rest);
         const ids: Array<string | number> = [];
         if (key === null) return { ...internRecordIds(rest, ids), ids };
         const target = key === undefined ? undefined : rest[key];
-        if (key === undefined || !isObject(target)) return rest;
-        return { ...rest, [key]: internRecordIds(target, ids), ids };
+        const targetObject = asJsonObject(target);
+        if (key === undefined || targetObject === undefined) return rest;
+        return { ...rest, [key]: internRecordIds(targetObject, ids), ids };
       }),
     }),
   );

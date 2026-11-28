@@ -16,8 +16,12 @@ const overlayPath = NodePath.join(serverDir, "tsconfig.scriptc.json");
 const nearestTsconfig = NodePath.join(srcDir, "tsconfig.json");
 const stubDir = NodePath.join(srcDir, "scriptc-stubs");
 const entryFile = "binScriptc.ts";
-const entry = NodePath.join(srcDir, entryFile);
-const out = NodePath.join(serverDir, "dist", "t3");
+const compileFile = process.env.SCRIPTC_PROBE ?? entryFile;
+const entry = NodePath.join(srcDir, compileFile);
+const out =
+  process.env.SCRIPTC_PROBE_OUT === undefined
+    ? NodePath.join(serverDir, "dist", "t3")
+    : process.env.SCRIPTC_PROBE_OUT;
 const sidecarCopies: ReadonlyArray<{ from: string; to: string }> = [
   {
     from: NodePath.join(srcDir, "preview", "playwrightSidecar.ts"),
@@ -198,7 +202,7 @@ function cgroupRemainingKb(): number {
 }
 
 /** Orchestrator-sized native islands sit at 2.5–6GiB scriptc RSS with several GiB still free. */
-const CHECKER_KEEPALIVE_REMAINING_KB = 2 * 1024 * 1024;
+const CHECKER_KEEPALIVE_REMAINING_KB = 512 * 1024;
 
 function releaseCheckersIfHostIsStarving(scriptcPid: number): NodeJS.Timeout {
   let released = false;
@@ -295,7 +299,7 @@ async function main(): Promise<number> {
             ...schemaPaths,
           },
         },
-        include: [entryFile],
+        include: [compileFile],
         exclude: [
           "**/*.test.ts",
           "**/*.testkit.ts",

@@ -6,7 +6,6 @@ import { ModelSelection } from "./modelSelection.ts";
 import {
   CommandId,
   ForwardCompatibleUnion,
-  isUnknownUnionMember,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -14,7 +13,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
-  type UnknownUnionMember,
+  UnknownUnionMember,
 } from "./baseSchemas.ts";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
@@ -172,7 +171,10 @@ export const ReceivedProjectIcon = ForwardCompatibleUnion(projectIconMembers, "k
       ProjectIconOverride | null,
       ProjectIconMember | UnknownUnionMember<"kind">
     >({
-      decode: (icon) => (isUnknownUnionMember(icon) ? null : fromLegacyMonogram(icon)),
+      decode: (icon) => {
+        if (icon instanceof UnknownUnionMember) return null;
+        return fromLegacyMonogram(icon);
+      },
       encode: (icon) => icon as ProjectIconMember,
     }),
   ),

@@ -582,9 +582,7 @@ export function isActiveRun(run: OrchestrationV2Run): boolean {
   return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
 }
 
-export function isTerminalRunStatus(
-  status: OrchestrationV2Run["status"],
-): status is ThreadManagementTerminalRunStatus {
+export function isTerminalRunStatus(status: OrchestrationV2Run["status"]): boolean {
   return (
     status === "completed" ||
     status === "failed" ||
@@ -999,13 +997,13 @@ const make = Effect.gen(function* () {
       message?.runId === null || message?.runId === undefined
         ? undefined
         : projection.runs.find((candidate) => candidate.id === message.runId);
-    const turnItem =
-      projection.turnItems.find(
-        (
-          candidate,
-        ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> =>
-          candidate.type === "user_message" && candidate.messageId === input.messageId,
-      ) ?? null;
+    let turnItem: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> | null = null;
+    for (const candidate of projection.turnItems) {
+      if (candidate.type === "user_message" && candidate.messageId === input.messageId) {
+        turnItem = candidate;
+        break;
+      }
+    }
     if (
       message === undefined ||
       run === undefined ||
@@ -1404,12 +1402,17 @@ const make = Effect.gen(function* () {
         runId: input.runId,
       });
     }
-    if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
+    if (
+      explicitRun !== undefined &&
+      (explicitRun.status === "completed" ||
+        explicitRun.status === "failed" ||
+        explicitRun.status === "cancelled" ||
+        explicitRun.status === "interrupted" ||
+        explicitRun.status === "rolled_back")
+    ) {
       return {
         type: "already_terminal",
-        run: explicitRun as OrchestrationV2Run & {
-          readonly status: ThreadManagementTerminalRunStatus;
-        },
+        run: explicitRun,
       } as const;
     }
     if (explicitRun?.status === "queued") {

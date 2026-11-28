@@ -68,8 +68,7 @@ export class EventSinkStreamError extends Schema.TaggedError<EventSinkStreamErro
   }
 }
 
-export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
-export type EventSinkV2Error = typeof EventSinkV2Error.Type;
+export type EventSinkV2Error = EventSinkWriteError | EventSinkStreamError;
 
 interface ProviderBatchPublication {
   readonly publish: Array<Effect.Effect<void>>;

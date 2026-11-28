@@ -141,7 +141,6 @@ import { routineSpan } from "@t3tools/shared/observability";
 
 import type { ProjectionStoreV2Error, ProjectionWindow } from "./ProjectionStore.ts";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindReadProjection = (ctx: any) => {
   const {
     isProjectionStoreReadError,
@@ -343,13 +342,7 @@ export const bindReadProjection = (ctx: any) => {
         }),
       };
     },
-    (effect, threadId, _seenThreadIds, _window?) =>
-      effect.pipe(
-        Effect.mapError((cause) =>
-          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-            ? cause
-            : new ProjectionStoreReadError({ threadId, cause }),
-        ),
-      ),
+    (effect, threadId, _seenThreadIds, _window) =>
+      effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
   );
 };

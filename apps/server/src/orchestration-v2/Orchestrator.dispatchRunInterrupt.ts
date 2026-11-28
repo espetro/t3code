@@ -236,7 +236,6 @@ import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindDispatchRunInterrupt = (ctx: any) =>
   Effect.fn("Orchestrator.dispatchRunInterrupt")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }>,
@@ -482,15 +481,20 @@ export const bindDispatchRunInterrupt = (ctx: any) =>
         occurredAt: now,
         payload: interruptResultItem,
       });
-      const preparationItem = projection.turnItems.find(
-        (
-          candidate,
-        ): candidate is Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> =>
+      let preparationItem:
+        | Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>
+        | undefined;
+      for (const candidate of projection.turnItems) {
+        if (
           candidate.runId === run.id &&
           candidate.type === "command_execution" &&
           candidate.input === WORKSPACE_PREPARATION_INPUT &&
-          candidate.status === "running",
-      );
+          candidate.status === "running"
+        ) {
+          preparationItem = candidate;
+          break;
+        }
+      }
       if (preparationItem !== undefined) {
         yield* emitEvent({
           type: "turn-item.updated",

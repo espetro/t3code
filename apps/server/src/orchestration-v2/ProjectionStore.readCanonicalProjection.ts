@@ -146,7 +146,6 @@ import type {
   ProjectionWindow,
 } from "./ProjectionStore.ts";
 
-// oxlint-disable-next-line typescript/no-explicit-any -- scriptc#4381: factory scope bag
 export const bindReadCanonicalProjection = (ctx: any) => {
   const { isProjectionStoreThreadNotFoundError, ProjectionStoreReadError } =
     pickScriptcBindCtx(ctx);
@@ -1062,15 +1061,14 @@ export const bindReadCanonicalProjection = (ctx: any) => {
       } satisfies OrchestrationV2ThreadProjection;
       return projection;
     },
-    (effect, threadId, _window?, _fields?, _filter?) =>
+    (effect, threadId, _window, _fields, _filter) =>
       effect.pipe(
-        Effect.mapError((cause) =>
-          isProjectionStoreThreadNotFoundError(cause)
-            ? cause
-            : new ProjectionStoreReadError({
-                threadId,
-                cause,
-              }),
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({
+              threadId,
+              cause,
+            }),
         ),
       ),
   );

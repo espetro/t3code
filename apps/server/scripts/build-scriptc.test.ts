@@ -15,7 +15,7 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   const script = NodeFS.readFileSync(new URL("./build-scriptc.ts", import.meta.url), "utf8");
   expect(script).toContain('extends: "../tsconfig.json"');
   expect(script).toContain("**/*.test.ts");
-  expect(script).toContain("include: [entryFile]");
+  expect(script).toContain("include: [compileFile]");
   expect(script).toContain('const entryFile = "binScriptc.ts"');
   expect(script).not.toContain("SCRIPTC_ENTRY");
   expect(script).toContain("unlinkSync(NodePath.join(stubDir, spec.stubFile))");

@@ -31,6 +31,14 @@ const decodeCommand = Schema.decodeUnknownEffect(OrchestrationV2Command);
 
 type NativeServices = Orchestrator.OrchestratorV2 | EventSink.EventSinkV2 | Scope.Scope;
 
+const dispatchFailureMessage = (error: unknown): string => {
+  const fallback = "Failed to dispatch orchestration command";
+  if (typeof error !== "object" || error === null) return fallback;
+  const message = Reflect.get(error, "message");
+  if (message === undefined) return fallback;
+  return String(message);
+};
+
 const bearerToken = (header: string | undefined): string => {
   const value = header === undefined ? "" : header;
   const match = /^Bearer\s+(\S+)/i.exec(value);
@@ -166,11 +174,7 @@ const handleDispatch = (
       Effect.flatMap((command) => intakeDispatch(command, { managesProviders: true })),
       Effect.match({
         onFailure: (error) => {
-          const message =
-            typeof error === "object" && error !== null && "message" in error
-              ? String(error.message)
-              : "Failed to dispatch orchestration command";
-          sendFailure(socket, requestId, message);
+          sendFailure(socket, requestId, dispatchFailureMessage(error));
         },
         onSuccess: (result) => {
           sendSuccess(socket, requestId, { sequence: result.sequence });
@@ -186,18 +190,21 @@ const handleRpcMessage = (
   message: unknown,
 ) => {
   if (typeof message !== "object" || message === null) return;
-  const row = message as Record<string, unknown>;
-  if (row._tag === "Ping") {
+  const tag = Reflect.get(message, "_tag");
+  if (tag === "Ping") {
     sendRpc(socket, { _tag: "Pong" });
     return;
   }
-  if (row._tag !== "Request") return;
-  const requestId = row.id;
-  const method = String(row.tag === undefined ? "" : row.tag);
-  const payload =
-    typeof row.payload === "object" && row.payload !== null
-      ? (row.payload as Record<string, unknown>)
-      : {};
+  if (tag !== "Request") return;
+  const requestId = Reflect.get(message, "id");
+  const method = String(Reflect.get(message, "tag") ?? "");
+  const rawPayload = Reflect.get(message, "payload");
+  const payload: Record<string, unknown> = {};
+  if (typeof rawPayload === "object" && rawPayload !== null && !Array.isArray(rawPayload)) {
+    for (const key of Object.keys(rawPayload)) {
+      payload[key] = Reflect.get(rawPayload, key);
+    }
+  }
   if (method === ORCHESTRATION_V2_WS_METHODS.subscribeThread) {
     handleSubscribe(socket, context, requestId, payload);
     return;

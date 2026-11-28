@@ -12,10 +12,13 @@ const readSessions = (baseDir: string): Array<NativeSession> => {
   try {
     const parsed: unknown = JSON.parse(NodeFS.readFileSync(sessionPath(baseDir), "utf8"));
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (row): row is NativeSession =>
-        typeof row === "object" && row !== null && typeof (row as NativeSession).token === "string",
-    );
+    const sessions: Array<NativeSession> = [];
+    for (const row of parsed) {
+      if (typeof row !== "object" || row === null) continue;
+      const token = Reflect.get(row, "token");
+      if (typeof token === "string") sessions.push({ token });
+    }
+    return sessions;
   } catch {
     return [];
   }

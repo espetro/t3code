@@ -1534,8 +1534,14 @@ const decodeContextTransferPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ContextTransferJsonSchema),
 );
 
-const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
-const isProjectionStoreReadError = Schema.is(ProjectionStoreReadError);
+const isProjectionStoreThreadNotFoundError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  Reflect.get(error, "_tag") === "ProjectionStoreThreadNotFoundError";
+const isProjectionStoreReadError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  Reflect.get(error, "_tag") === "ProjectionStoreReadError";
 
 function parseEncodedPayload(json: string): Record<string, unknown> {
   return JSON.parse(json) as Record<string, unknown>;
@@ -2026,7 +2032,7 @@ export function threadShellFromProjection(
       latestRun != null && isBackgroundWakeRunForShell(latestRun, projection),
     activeRunId: activeRun?.id ?? null,
     blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
-    activityRunStatus: activityRun?.status ?? null,
+    activityRunStatus: activityRun === null ? null : shellActivityStatus(activityRun.status),
     activityRunStartedAt:
       activityRun === null ? null : orchestrationV2RunWorkStartedAt(activityRun),
     status: latestRun?.status ?? "idle",
@@ -2145,12 +2151,28 @@ function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"]
 
 type ShellActivityRunStatus = "preparing" | "running" | "starting" | "waiting";
 
-function isActivityRunForShell(
-  run: OrchestrationV2ThreadProjection["runs"][number],
-): run is OrchestrationV2ThreadProjection["runs"][number] & {
-  readonly status: ShellActivityRunStatus;
-} {
+function isActivityRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
   return isInterruptibleRunForShell(run) || run.status === "waiting";
+}
+
+function definedRunIds(ids: ReadonlyArray<RunId | null>): Array<RunId> {
+  const out: Array<RunId> = [];
+  for (const id of ids) {
+    if (id !== null) out.push(id);
+  }
+  return out;
+}
+
+function shellActivityStatus(status: string): ShellActivityRunStatus | null {
+  if (
+    status === "preparing" ||
+    status === "running" ||
+    status === "starting" ||
+    status === "waiting"
+  ) {
+    return status;
+  }
+  return null;
 }
 
 export type ShellThreadState = {
@@ -2679,7 +2701,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ${filter?.turnItemStatuses === undefined ? sql`` : sql`AND status IN (SELECT value FROM json_each(${encodeIdList(filter.turnItemStatuses)}))`}
         ${filter?.turnItemRunId === undefined ? sql`` : sql`AND run_id = ${filter.turnItemRunId}`}
         ${filter?.turnItemNodeIds === undefined ? sql`` : sql`AND node_id IN (SELECT value FROM json_each(${encodeIdList(filter.turnItemNodeIds)}))`}
-        ${filter?.turnItemRunIds === undefined ? sql`` : sql`AND (run_id IN (SELECT value FROM json_each(${encodeIdList(filter.turnItemRunIds.filter((id): id is RunId => id !== null))})) OR (${filter.turnItemRunIds.includes(null) ? 1 : 0} = 1 AND run_id IS NULL))`}
+        ${filter?.turnItemRunIds === undefined ? sql`` : sql`AND (run_id IN (SELECT value FROM json_each(${encodeIdList(definedRunIds(filter.turnItemRunIds))})) OR (${filter.turnItemRunIds.includes(null) ? 1 : 0} = 1 AND run_id IS NULL))`}
     `;
 
     // An id filter reads by primary key. `+` keeps SQLite off the thread index, which walks
@@ -2908,15 +2930,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           },
         })(threadId, window, fields, filter) as Effect.Effect<any, never, never>;
       },
-      (effect, threadId, _window?, _fields?, _filter?) =>
+      (effect, threadId, _window, _fields, _filter) =>
         effect.pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause)
-              ? cause
-              : new ProjectionStoreReadError({
-                  threadId,
-                  cause,
-                }),
+          Effect.mapError(
+            (cause) =>
+              new ProjectionStoreReadError({
+                threadId,
+                cause,
+              }),
           ),
         ),
     );
@@ -2981,14 +3002,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           },
         })(threadId, seenThreadIds, window) as Effect.Effect<any, never, never>;
       },
-      (effect, threadId, _seenThreadIds, _window?) =>
-        effect.pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        ),
+      (effect, threadId, _seenThreadIds, _window) =>
+        effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
     );
 
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
@@ -3034,9 +3049,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(payload_json, '$.limitRecovery.autoResume') = 1
           )
         `;
-        const wakes = [rows[0]?.reset_ms, rows[0]?.snooze_ms].filter(
-          (value): value is number => value != null,
-        );
+        const wakes: Array<number> = [];
+        const resetMs = rows[0]?.reset_ms;
+        const snoozeMs = rows[0]?.snooze_ms;
+        if (typeof resetMs === "number") wakes.push(resetMs);
+        if (typeof snoozeMs === "number") wakes.push(snoozeMs);
         return wakes.length === 0 ? null : Math.round(Math.min(...wakes));
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
@@ -3209,13 +3226,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
       sql
         .withTransaction(readProjection(threadId, new Set()))
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getRuntimeRecoveryProjection: ProjectionStoreV2Shape["getRuntimeRecoveryProjection"] =
       Effect.fn("ProjectionStore.getRuntimeRecoveryProjection")(
@@ -3276,11 +3287,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         },
         (effect, threadId) =>
           effect.pipe(
-            Effect.mapError((cause) =>
-              isProjectionStoreThreadNotFoundError(cause)
-                ? cause
-                : new ProjectionStoreReadError({ threadId, cause }),
-            ),
+            Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
           ),
       );
 
@@ -3316,9 +3323,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       if (rows.length === 0) return yield* new ProjectionStoreThreadNotFoundError({ threadId });
     });
     const controlReadError = (threadId: ThreadId) => (cause: unknown) =>
-      isProjectionStoreThreadNotFoundError(cause)
-        ? cause
-        : new ProjectionStoreReadError({ threadId, cause });
+      new ProjectionStoreReadError({ threadId, cause });
 
     const getPendingNativeUserInputs: ProjectionStoreV2Shape["getPendingNativeUserInputs"] = (
       threadId,
@@ -3659,13 +3664,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             return yield* decodeCheckpointContext({ runs, checkpointScopes, checkpoints });
           }),
         )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getCheckpointCaptureContext: ProjectionStoreV2Shape["getCheckpointCaptureContext"] =
       bindGetCheckpointCaptureContext({
@@ -4215,13 +4214,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             };
           }),
         )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const readTimelineIndex: (
       threadId: ThreadId,
@@ -4274,13 +4267,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         })(threadId, seen, includeAttempts) as Effect.Effect<any, never, never>;
       },
       (effect, threadId, _seen) =>
-        effect.pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        ),
+        effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
     );
 
     // Every committed projection write appends a thread event, so the newest event across the
