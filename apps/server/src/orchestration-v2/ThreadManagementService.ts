@@ -1086,11 +1086,15 @@ const make = Effect.gen(function* () {
       });
     }
     const checked = yield* checkOutput(run.outputSchema, input.json);
-    if (Result.isFailure(checked)) {
+    const checkedOutput = Result.match(checked, {
+      onFailure: (failure) => ({ failure }) as const,
+      onSuccess: (success) => ({ success }) as const,
+    });
+    if ("failure" in checkedOutput) {
       return yield* new ThreadManagementRunOutputRejectedError({
         threadId: input.threadId,
-        problem: checked.failure.problem,
-        ...(checked.failure.cause === undefined ? {} : { cause: checked.failure.cause }),
+        problem: checkedOutput.failure.problem,
+        ...(checkedOutput.failure.cause === undefined ? {} : { cause: checkedOutput.failure.cause }),
       });
     }
     yield* dispatch({
@@ -1098,7 +1102,7 @@ const make = Effect.gen(function* () {
       commandId: input.commandId,
       threadId: input.threadId,
       runId: run.id,
-      value: checked.success,
+      value: checkedOutput.success,
     });
     return { runId: run.id };
   });

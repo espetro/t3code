@@ -2312,7 +2312,11 @@ export const layer: Layer.Layer<
           input.shouldStartProviderTurn === undefined
             ? Exit.succeed(true)
             : yield* Effect.exit(input.shouldStartProviderTurn());
-        if (Exit.isSuccess(shouldStart) && !shouldStart.value) {
+        const shouldStartAllowed = Exit.match(shouldStart, {
+          onFailure: () => undefined,
+          onSuccess: (value) => value,
+        });
+        if (shouldStartAllowed === false) {
           yield* Fiber.interrupt(providerEventFiber);
           return;
         }
@@ -2386,7 +2390,7 @@ export const layer: Layer.Layer<
                           terminal: makeFailedTerminalEvent(
                             makeProviderFailure({
                               cause: Cause.squash(cause),
-                              class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                              class: shouldStartAllowed === undefined ? "unknown" : "provider_error",
                             }),
                             latestItemOrdinal + 1,
                           ),

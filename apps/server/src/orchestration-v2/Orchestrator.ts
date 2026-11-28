@@ -3075,14 +3075,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command,
             now,
           });
-    if (Result.isFailure(decided)) {
+    const guestShareUpdate = Result.match(decided, {
+      onFailure: (failure) => ({ failure }) as const,
+      onSuccess: (success) => ({ success }) as const,
+    });
+    if ("failure" in guestShareUpdate) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: decided.failure,
+        cause: guestShareUpdate.failure,
       });
     }
-    if (decided.success === thread) return;
+    if (guestShareUpdate.success === thread) return;
     yield* emit(
       events,
       command,
@@ -3091,9 +3095,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       threadId: command.threadId,
       providerInstanceId: thread.providerInstanceId,
       occurredAt: now,
-      payload: decided.success,
+      payload: guestShareUpdate.success,
     });
-    yield* releaseGuestAttachments(command, thread.guestShare, decided.success.guestShare, effects);
+    yield* releaseGuestAttachments(
+      command,
+      thread.guestShare,
+      guestShareUpdate.success.guestShare,
+      effects,
+    );
   });
 
   // Emitted before the message so the send and the status change commit together, and so
@@ -3106,11 +3115,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) {
     const now = yield* DateTime.now;
     const decided = decideGuestMessageSend({ thread, guestMessageId, now });
-    if (Result.isFailure(decided)) {
+    const guestMessageDecision = Result.match(decided, {
+      onFailure: (failure) => ({ failure }) as const,
+      onSuccess: (success) => ({ success }) as const,
+    });
+    if ("failure" in guestMessageDecision) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: decided.failure,
+        cause: guestMessageDecision.failure,
       });
     }
     yield* emit(
@@ -3121,9 +3134,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       threadId: command.threadId,
       providerInstanceId: thread.providerInstanceId,
       occurredAt: now,
-      payload: decided.success.thread,
+      payload: guestMessageDecision.success.thread,
     });
-    return decided.success;
+    return guestMessageDecision.success;
   });
 
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (

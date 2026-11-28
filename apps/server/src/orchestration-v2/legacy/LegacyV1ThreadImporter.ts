@@ -487,8 +487,8 @@ const make = Effect.gen(function* () {
     let repairedThreadCount = 0;
     for (const row of repairRows) {
       const decoded = decodeStoredThread(row.payload_json);
-      if (Option.isNone(decoded)) continue;
-      const current = decoded.value;
+      const current = Option.getOrUndefined(decoded);
+      if (current === undefined) continue;
       const legacy = importedThread(row, now);
       const legacyPullRequests = legacy.pullRequests ?? [];
       const repaired: OrchestrationV2AppThread = {

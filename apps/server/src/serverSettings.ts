@@ -434,18 +434,32 @@ function decodeSettingsFile(
   managed: ManagedPolicy.ManagedPolicy["Service"]["settings"],
 ) {
   const parsed = decodeSettingsFileJsonExit(raw);
-  const decoded = Exit.isFailure(parsed)
-    ? parsed
-    : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
+  const parsedJson = Exit.match(parsed, {
+    onFailure: () => undefined,
+    onSuccess: (value) => value,
+  });
+  const decoded: Exit.Exit<ServerSettings, unknown> =
+    parsedJson === undefined
+      ? Exit.failCause(
+          Exit.match(parsed, {
+            onFailure: (cause) => cause,
+            onSuccess: () => Cause.die("unreachable"),
+          }),
+        )
+      : decodePersistedServerSettingsExit(managed.withDefaults(parsedJson));
   const legacy = decodeLegacyProviderSettingsJsonExit(raw);
   const failure = Exit.isFailure(decoded)
     ? decoded.cause
     : Exit.isFailure(legacy)
       ? legacy.cause
       : undefined;
+  const decodedSettings = Exit.match(decoded, {
+    onFailure: () => undefined,
+    onSuccess: (value) => (value === null ? undefined : value),
+  });
   const settings: ServerSettings =
-    Exit.isSuccess(decoded) && failure === undefined
-      ? decoded.value
+    decodedSettings !== undefined && failure === undefined
+      ? decodedSettings
       : // The file may hold choices we can no longer read, so opt-in behaviour stays off.
         {
           ...managed.defaults,
@@ -456,7 +470,11 @@ function decodeSettingsFile(
           enableAgentBrowserAccess: false,
           defaultRuntimeMode: "approval-required",
         };
-  return { settings, legacy: Exit.isSuccess(legacy) ? legacy.value : undefined, failure };
+  const legacySettings = Exit.match(legacy, {
+    onFailure: () => undefined,
+    onSuccess: (value) => value,
+  });
+  return { settings, legacy: legacySettings, failure };
 }
 
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
@@ -781,7 +799,7 @@ const make = Effect.gen(function* () {
   const readStoredSettings = Effect.gen(function* () {
     if (!(yield* readConfigExists)) return undefined;
     const parsed = decodeSettingsFileJsonExit(yield* readRawConfig);
-    return Exit.isSuccess(parsed) ? parsed.value : undefined;
+    return Exit.match(parsed, { onFailure: () => undefined, onSuccess: (value) => value });
   });
 
   const writeSettingsAtomically = Effect.fnUntraced(
@@ -1168,10 +1186,12 @@ const make = Effect.gen(function* () {
     Effect.forEach(
       writes.toReversed(),
       (write) =>
-        (Option.isSome(write.previousValue)
-          ? secretStore.set(write.secretName, write.previousValue.value)
-          : secretStore.remove(write.secretName)
-        ).pipe(
+        (() => {
+          const previous = Option.getOrUndefined(write.previousValue);
+          return previous === undefined
+            ? secretStore.remove(write.secretName)
+            : secretStore.set(write.secretName, previous);
+        })().pipe(
           Effect.catch((cause) =>
             Effect.logWarning("failed to roll back settings secret", {
               providerInstanceId: write.providerInstanceId,
@@ -1240,11 +1260,12 @@ const make = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const { settings: current, parseFailure } = yield* reloadSettings;
-        if (Option.isSome(parseFailure)) {
+        const parseFailureCause = Option.getOrUndefined(parseFailure);
+        if (parseFailureCause !== undefined) {
           return yield* new ServerSettingsError({
             settingsPath,
             operation: "read-file",
-            cause: parseFailure.value,
+            cause: parseFailureCause,
           });
         }
         // An older client echoes a reference as the redacted marker; restore it before vetting so
@@ -1301,7 +1322,10 @@ const make = Effect.gen(function* () {
               yield* rollbackSecretChanges;
               return yield* Effect.failCause(writeExit.cause);
             }
-            return materializedExit.value;
+            return Exit.match(materializedExit, {
+              onFailure: () => undefined as never,
+              onSuccess: (value) => value,
+            });
           }).pipe(Effect.ensuring(invalidateMaterialized)),
         );
         yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });

@@ -909,21 +909,26 @@ export const layerWithOptions = (
       const runOnce = Effect.fnUntraced(
         function* (filter: ClaimFilter = {}) {
           const claimExit = yield* Effect.exit(outbox.claimNext({ workerId, ...filter }));
-          let claimResult: (typeof claimExit extends Exit.Exit<infer A, unknown> ? A : never) | undefined;
-          let claimFailed = false;
-          if (Exit.isFailure(claimExit)) {
-            claimFailed = true;
-          } else {
-            claimResult = Option.getOrUndefined(claimExit.value);
-          }
-          yield* increment(orchestrationEffectClaimsTotal, {
-            result: claimFailed ? "error" : claimResult === undefined ? "empty" : "claimed",
+          const claimOutcome = Exit.match(claimExit, {
+            onFailure: (cause) => ({ kind: "failure" as const, cause }),
+            onSuccess: (value) => ({
+              kind: "success" as const,
+              value: Option.getOrUndefined(value),
+            }),
           });
-          if (claimFailed) return yield* Effect.failCause(claimExit.cause);
-          if (claimResult === undefined) {
+          yield* increment(orchestrationEffectClaimsTotal, {
+            result:
+              claimOutcome.kind === "failure"
+                ? "error"
+                : claimOutcome.value === undefined
+                  ? "empty"
+                  : "claimed",
+          });
+          if (claimOutcome.kind === "failure") return yield* Effect.failCause(claimOutcome.cause);
+          if (claimOutcome.value === undefined) {
             return false;
           }
-          const effect = claimResult;
+          const effect = claimOutcome.value;
           // Arm cancellation before rereading durable state to close the read-to-registration race.
           const cancellation = outbox
             .awaitCancellation(effect.id)
@@ -956,10 +961,14 @@ export const layerWithOptions = (
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );
-          if (Exit.isSuccess(exit) && exit.value === "cancelled") {
+          const raceResult = Exit.match(exit, {
+            onFailure: () => undefined,
+            onSuccess: (value) => value,
+          });
+          if (raceResult === "cancelled") {
             return true;
           }
-          if (Exit.isSuccess(exit)) {
+          if (raceResult !== undefined) {
             return yield* Effect.gen(function* () {
               const completed = yield* outbox.succeed({ effectId: effect.id, workerId });
               if (!completed) {

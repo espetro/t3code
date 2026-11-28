@@ -267,8 +267,9 @@ export const make = Effect.gen(function* () {
         }).pipe(mapError("apply"));
       }
       const existing = yield* get(event.payload.projectId, { includeDeleted: true });
-      if (Option.isNone(existing)) return;
-      const row = existing.value;
+      const existingRow = Option.getOrUndefined(existing);
+      if (existingRow === undefined) return;
+      const row = existingRow;
       if (event.type === "project.deleted") {
         return yield* upsertRow({
           ...row,

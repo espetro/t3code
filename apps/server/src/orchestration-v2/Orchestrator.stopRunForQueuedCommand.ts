@@ -299,18 +299,23 @@ export const bindStopRunForQueuedCommand = (ctx: any) =>
     );
     // A failed interrupt may have written part of its events, so they are kept apart.
     // The queued command then waits for the turn to end.
-    if (Exit.isFailure(interrupted)) {
+    const interruptOutcome = Exit.match(interrupted, {
+      onFailure: (cause) => ({ kind: "failure" as const, cause }),
+      onSuccess: (value) => ({ kind: "success" as const, value }),
+    });
+    if (interruptOutcome.kind === "failure") {
       yield* Effect.logWarning("queued command could not stop the running turn", {
         threadId: command.threadId,
         runId: targetRunId,
-        cause: interrupted.cause,
+        cause: interruptOutcome.cause,
       });
       return undefined;
     }
+    const interruptResult = interruptOutcome.value;
     const written = yield* Ref.get(interruptEvents);
     const enqueued = yield* Ref.get(interruptEffects);
     yield* Ref.update(events, (existing) => [...existing, ...written]);
     yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
     // Like Stop: a run stopped before its provider started also abandons that start.
-    return interrupted.value;
+    return interruptResult;
   });

@@ -223,7 +223,19 @@ function releaseCheckersIfHostIsStarving(scriptcPid: number): NodeJS.Timeout {
     process.stderr.write(
       `scriptc pid=${String(scriptcPid)} rssKb=${String(rss)} remainingKb=${String(remaining)} checkers=${String(checkers.length)}\n`,
     );
-    // Ballooned cgroups under-report remainingKb; killing checkers aborts typecheck (SC3004).
+    // Kill only when the cgroup is actually starving. Scriptc RSS alone is not OOM.
+    if (remaining > CHECKER_KEEPALIVE_REMAINING_KB) return;
+    released = true;
+    process.stderr.write(
+      `scriptc pid=${String(scriptcPid)} rssKb=${String(rss)} remainingKb=${String(remaining)} SIGKILL checker pids=${checkers.join(",")}\n`,
+    );
+    for (const pid of checkers) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
   }, 2_000);
 }
 

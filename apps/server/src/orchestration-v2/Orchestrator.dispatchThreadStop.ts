@@ -319,20 +319,26 @@ export const bindDispatchThreadStop = (ctx: any) =>
         ),
       );
       // A failed interrupt may have written part of its events, so they are kept apart.
-      if (Exit.isSuccess(interrupted)) {
+      const interruptOutcome = Exit.match(interrupted, {
+        onFailure: (cause) => ({ kind: "failure" as const, cause }),
+        onSuccess: (value) => ({ kind: "success" as const, value }),
+      });
+      if (interruptOutcome.kind === "failure") {
+        yield* Effect.logWarning("thread.stop could not interrupt the running turn", {
+          threadId: command.threadId,
+          runId: target.id,
+          cause: interruptOutcome.cause,
+        });
+      } else {
+        const interruptResult = interruptOutcome.value;
         const written = yield* Ref.get(interruptEvents);
         const enqueued = yield* Ref.get(interruptEffects);
         yield* Ref.update(events, (existing) => [...existing, ...written]);
         yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
         yield* cancelIdleOrphans({ command, events, projection });
         yield* stopDelegatedTasks;
-        return interrupted.value;
+        return interruptResult;
       }
-      yield* Effect.logWarning("thread.stop could not interrupt the running turn", {
-        threadId: command.threadId,
-        runId: target.id,
-        cause: interrupted.cause,
-      });
     }
     const now = yield* DateTime.now;
     // Record that Stop reached the turn it could not interrupt and the thread's last executed

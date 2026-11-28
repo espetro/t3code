@@ -606,15 +606,19 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             const row = rows[0];
             if (row === undefined) return Option.none();
             const decoded = yield* Effect.result(rowToEffect(row));
-            if (Result.isSuccess(decoded)) {
+            const effect = Result.match(decoded, {
+              onFailure: (failure) => ({ failure }) as const,
+              onSuccess: (success) => ({ success }) as const,
+            });
+            if ("success" in effect) {
               cancellationSignals.set(row.effect_id, Deferred.makeUnsafe<void>());
-              return Option.some(decoded.success);
+              return Option.some(effect.success);
             }
             // Left running, an unreadable row would block every later effect on its thread.
             yield* Effect.logWarning("Failing an orchestration effect this build cannot decode", {
               effectId: row.effect_id,
               effectType: row.effect_type,
-              cause: decoded.failure,
+              cause: effect.failure,
             });
             yield* service.fail({
               effectId: row.effect_id,
