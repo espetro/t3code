@@ -118,12 +118,13 @@ const makeLayerFromPath = <E, R>(makeSetup: (dbPath: string) => Layer.Layer<neve
         },
       }),
     ).pipe(
-      Layer.catchTag("SqlError", (error) =>
-        Layer.effect(
-          SqlClient.SqlClient,
-          Effect.fail(isDamagedDatabase(error) ? damagedDatabaseError(dbPath, error) : error),
-        ),
-      ),
+      Layer.catchTag("SqlError", (error) => {
+        const sqlError: any = error;
+        const failed = isDamagedDatabase(sqlError)
+          ? damagedDatabaseError(dbPath, sqlError)
+          : sqlError;
+        return Layer.effect(SqlClient.SqlClient, Effect.fail(failed));
+      }),
     );
   }, Layer.unwrap);
 
