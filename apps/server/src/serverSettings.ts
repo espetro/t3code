@@ -448,11 +448,15 @@ function decodeSettingsFile(
         )
       : decodePersistedServerSettingsExit(managed.withDefaults(parsedJson));
   const legacy = decodeLegacyProviderSettingsJsonExit(raw);
-  const failure = Exit.isFailure(decoded)
-    ? decoded.cause
-    : Exit.isFailure(legacy)
-      ? legacy.cause
-      : undefined;
+  const failure =
+    Exit.match(decoded, {
+      onFailure: (cause) => cause,
+      onSuccess: () => undefined,
+    }) ??
+    Exit.match(legacy, {
+      onFailure: (cause) => cause,
+      onSuccess: () => undefined,
+    });
   const decodedSettings = Exit.match(decoded, {
     onFailure: () => undefined,
     onSuccess: (value) => (value === null ? undefined : value),

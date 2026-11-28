@@ -1177,7 +1177,11 @@ export const layer: Layer.Layer<
         ],
         { concurrency: 2 },
       );
-      if (Exit.isFailure(root)) return yield* Effect.failCause(root.cause);
+      const rootFailure = Exit.match(root, {
+        onFailure: (cause) => cause,
+        onSuccess: () => undefined,
+      });
+      if (rootFailure !== undefined) return yield* Effect.failCause(rootFailure);
     });
 
     const deleteStaleRefs: CheckpointServiceV2Shape["deleteStaleRefs"] = (input) =>
