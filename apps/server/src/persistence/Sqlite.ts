@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
@@ -29,8 +28,8 @@ const DAMAGED_SQLITE_CODES = new Set([11, 26]);
 
 const isDamagedDatabase = (error: SqlError.SqlError): boolean => {
   const seen = new Set<unknown>();
-  let cause: unknown = error.cause;
-  while (Predicate.isObject(cause) && !seen.has(cause)) {
+  let cause: any = error.cause;
+  while (cause !== null && typeof cause === "object" && !seen.has(cause)) {
     seen.add(cause);
     if (typeof cause.errcode === "number" && DAMAGED_SQLITE_CODES.has(cause.errcode & 0xff)) {
       return true;
@@ -122,11 +121,7 @@ const makeLayerFromPath = <E, R>(makeSetup: (dbPath: string) => Layer.Layer<neve
       Layer.catchTag("SqlError", (error) =>
         Layer.effect(
           SqlClient.SqlClient,
-          Effect.fail(
-            SqlError.isSqlError(error) && isDamagedDatabase(error)
-              ? damagedDatabaseError(dbPath, error)
-              : error,
-          ),
+          Effect.fail(isDamagedDatabase(error) ? damagedDatabaseError(dbPath, error) : error),
         ),
       ),
     );

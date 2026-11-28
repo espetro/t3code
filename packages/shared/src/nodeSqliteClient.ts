@@ -12,7 +12,6 @@ import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scheduler from "effect/Scheduler";
@@ -145,12 +144,11 @@ const checkNodeSqliteCompat = Effect.fn("checkNodeSqliteCompat")(function () {
 
 // node:sqlite supplies errcode; classifySqliteError expects errno.
 const classifyError = (cause: unknown, message: string, operation: string) => {
-  if (
-    Predicate.hasProperty(cause, "errcode") &&
-    typeof cause.errcode === "number" &&
-    !Predicate.hasProperty(cause, "errno")
-  ) {
-    Object.assign(cause, { errno: cause.errcode });
+  const record: any = cause;
+  if (record !== null && typeof record === "object" && typeof record.errcode === "number") {
+    if (record.errno === undefined) {
+      record.errno = record.errcode;
+    }
   }
   return classifySqliteError(cause, { message, operation });
 };
@@ -605,10 +603,10 @@ const makeWorkerConnection = Effect.fnUntraced(function* (options: {
 });
 
 const startFailure = (error: SqlError) => {
-  const cause = error.reason.cause;
+  const cause: any = error.reason.cause;
   return {
-    reason: cause instanceof Error ? cause.message : error.message,
-    permanent: Predicate.hasProperty(cause, "code") && cause.code === NOT_WAL,
+    reason: typeof cause?.message === "string" ? cause.message : error.message,
+    permanent: cause !== null && typeof cause === "object" && cause.code === NOT_WAL,
   };
 };
 
