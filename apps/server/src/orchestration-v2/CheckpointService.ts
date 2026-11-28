@@ -517,7 +517,8 @@ export const layer: Layer.Layer<
           if (copied) return;
 
           const timeouts = yield* Cache.getOption(captureTimeouts, input.scope.cwd);
-          if (Option.isSome(timeouts) && timeouts.value >= 2) {
+          const timeoutCount = Option.getOrUndefined(timeouts);
+          if (timeoutCount !== undefined && timeoutCount >= 2) {
             return yield* Effect.logWarning(
               "orchestration V2 checkpoint baseline skipped after repeated capture timeouts",
               { scopeId: input.scope.id, ordinalWithinScope: input.ordinalWithinScope },

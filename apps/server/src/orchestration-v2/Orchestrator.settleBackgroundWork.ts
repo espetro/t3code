@@ -290,11 +290,15 @@ export const bindSettleBackgroundWork = (ctx: any) =>
       const session = yield* providerSessions
         .get(providerThread.providerSessionId)
         .pipe(Effect.orElseSucceed(() => Option.none()));
-      if (Option.isNone(session) || session.value.hasPendingBackgroundWorkForThread === undefined) {
+      const sessionRuntime = Option.getOrUndefined(session);
+      if (
+        sessionRuntime === undefined ||
+        sessionRuntime.hasPendingBackgroundWorkForThread === undefined
+      ) {
         return false;
       }
       return yield* (
-        session.value
+        sessionRuntime
           .hasPendingBackgroundWorkForThread(providerThread)
           // A failed probe cannot confirm that the work ended.
           .pipe(Effect.catchCause(() => Effect.succeed(true)))

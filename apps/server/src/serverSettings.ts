@@ -411,8 +411,9 @@ export const readServerSettingsFromDisk = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const { settings: managed } = yield* ManagedPolicy.ManagedPolicy;
   const raw = yield* fs.readFileString(settingsPath).pipe(Effect.option);
+  const rawSettings = Option.getOrUndefined(raw);
   return managed.applyLocks(
-    Option.isNone(raw) ? managed.defaults : decodeSettingsFile(raw.value, managed).settings,
+    rawSettings === undefined ? managed.defaults : decodeSettingsFile(rawSettings, managed).settings,
   );
 }).pipe(Effect.withSpan("ServerSettings.readServerSettingsFromDisk"));
 const LegacyProviderSettingsJson = fromLenientJson(
@@ -702,17 +703,17 @@ function foldLegacyProjectSettings(
     else set(projectId, "defaultProjectScripts", value);
   }
   for (const row of rows) {
-    const model = decodeModelSelectionJson(row.defaultModelSelection ?? "null");
-    if (Option.isSome(model) && model.value !== null) {
-      set(row.projectId, "defaultModelSelection", model.value);
+    const model = Option.getOrUndefined(decodeModelSelectionJson(row.defaultModelSelection ?? "null"));
+    if (model !== undefined && model !== null) {
+      set(row.projectId, "defaultModelSelection", model);
     }
     if (row.defaultThreadEnvMode === "local" || row.defaultThreadEnvMode === "worktree") {
       set(row.projectId, "defaultThreadEnvMode", row.defaultThreadEnvMode);
     }
     if (row.autoPull === 1) set(row.projectId, "defaultAutoPull", true);
-    const scripts = decodeProjectScriptsJson(row.scripts);
-    if (Option.isSome(scripts) && scripts.value.length > 0 && !resetScripts.has(row.projectId)) {
-      set(row.projectId, "defaultProjectScripts", scripts.value);
+    const scripts = Option.getOrUndefined(decodeProjectScriptsJson(row.scripts));
+    if (scripts !== undefined && scripts.length > 0 && !resetScripts.has(row.projectId)) {
+      set(row.projectId, "defaultProjectScripts", scripts);
     }
   }
   const projectSettingsOverrides = Object.fromEntries(
@@ -937,9 +938,12 @@ const make = Effect.gen(function* () {
         : [],
       (move) =>
         secretStore.get(move.from).pipe(
-          Effect.flatMap((secret) =>
-            Option.isNone(secret) ? Effect.void : secretStore.set(move.to, secret.value),
-          ),
+          Effect.flatMap((secret) => {
+            const secretBytes = Option.getOrUndefined(secret);
+            return secretBytes === undefined
+              ? Effect.void
+              : secretStore.set(move.to, secretBytes);
+          }),
           Effect.as(true),
           Effect.catch(() =>
             Effect.logWarning("failed to copy a source control secret to its new name", {
@@ -1004,9 +1008,10 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+        const secretValue = Option.getOrUndefined(value);
         storedSecrets.set(
           secret.secretName,
-          Option.isSome(value) ? textDecoder.decode(value.value) : "",
+          secretValue === undefined ? "" : textDecoder.decode(secretValue),
         );
       }
       return mapSettingsSecrets(settings, (secret) => ({

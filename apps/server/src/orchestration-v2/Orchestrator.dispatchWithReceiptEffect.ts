@@ -296,8 +296,9 @@ export const bindDispatchWithReceiptEffect = (ctx: any) =>
       ),
     );
 
-    if (Option.isSome(existingReceipt)) {
-      return yield* replayCommandReceipt(command, existingReceipt.value);
+    const existingReceiptValue = Option.getOrUndefined(existingReceipt);
+    if (existingReceiptValue !== undefined) {
+      return yield* replayCommandReceipt(command, existingReceiptValue);
     }
 
     // Recheck under the lock; the user may have raised modes since sender preflight.
@@ -440,14 +441,15 @@ export const bindDispatchWithReceiptEffect = (ctx: any) =>
         const receipt = yield* mapDispatchError(command)(
           commandReceipts.getByCommandId(command.commandId),
         );
-        if (Option.isNone(receipt)) {
+        const receiptValue = Option.getOrUndefined(receipt);
+        if (receiptValue === undefined) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
             cause: "Conflicting receipt is not a thread command receipt.",
           });
         }
-        return yield* replayCommandReceipt(command, receipt.value);
+        return yield* replayCommandReceipt(command, receiptValue);
       }
       return {
         sequence: resultSequence,

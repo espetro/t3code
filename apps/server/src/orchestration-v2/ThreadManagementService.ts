@@ -1045,7 +1045,8 @@ const make = Effect.gen(function* () {
       .getByCommandId(input.commandId)
       .pipe(Effect.orElseSucceed(() => Option.none()));
     const anyRun = records.runs[0];
-    if (Option.isSome(receipt) && receipt.value.status === "accepted" && anyRun !== undefined) {
+    const receiptValue = Option.getOrUndefined(receipt);
+    if (receiptValue !== undefined && receiptValue.status === "accepted" && anyRun !== undefined) {
       const replayed = yield* orchestrator.dispatch({
         type: "run.output.submit",
         commandId: input.commandId,
@@ -1238,7 +1239,8 @@ const make = Effect.gen(function* () {
       Effect.timeoutOption(Duration.millis(Math.max(1, input.timeoutMs))),
     );
     const waited = Option.flatten(yield* wait);
-    if (Option.isSome(waited)) return settledResult(waited.value);
+    const waitedResult = Option.getOrUndefined(waited);
+    if (waitedResult !== undefined) return settledResult(waitedResult);
     // The run may have reached a terminal status while the timeout was
     // winning the race; the final projection read decides what actually
     // happened, so only a still-active run counts as timed out.
@@ -1599,9 +1601,10 @@ const make = Effect.gen(function* () {
         const released = yield* Fiber.join(release.fiber).pipe(
           Effect.timeoutOption(FORCE_STOP_RELEASE_WAIT),
         );
-        if (Option.isNone(released)) {
+        const releaseFinished = Option.getOrUndefined(released);
+        if (releaseFinished === undefined) {
           releasing = true;
-        } else if (!released.value && !(yield* laterRunActive(release.providerSessionId))) {
+        } else if (!releaseFinished && !(yield* laterRunActive(release.providerSessionId))) {
           shared = true;
           yield* detach(release.providerSessionId);
         }
@@ -1683,14 +1686,15 @@ const make = Effect.gen(function* () {
               new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
           ),
         );
-      if (Option.isNone(runtime)) {
+      const runtimeSession = Option.getOrUndefined(runtime);
+      if (runtimeSession === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
-      if (runtime.value.stopTask === undefined) {
+      if (runtimeSession.stopTask === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
       }
       // Bounded so a provider that never answers cannot hold the thread lock.
-      yield* runtime.value.stopTask({ providerThread, taskId }).pipe(
+      yield* runtimeSession.stopTask({ providerThread, taskId }).pipe(
         Effect.timeout("15 seconds"),
         Effect.mapError(
           (cause) =>
@@ -1728,16 +1732,17 @@ const make = Effect.gen(function* () {
     const runtime = yield* sessions
       .get(providerThread.providerSessionId)
       .pipe(Effect.mapError(unavailable));
-    if (Option.isNone(runtime)) {
+    const runtimeSession = Option.getOrUndefined(runtime);
+    if (runtimeSession === undefined) {
       return yield* unavailable();
     }
-    if (runtime.value.awaitBackgroundTasks === undefined) {
+    if (runtimeSession.awaitBackgroundTasks === undefined) {
       return yield* new ThreadManagementBackgroundWaitError({
         threadId: input.threadId,
         reason: "unsupported",
       });
     }
-    const { matched } = yield* runtime.value
+    const { matched } = yield* runtimeSession
       .awaitBackgroundTasks({ providerThread, taskIds: input.taskIds, awaited: input.awaited })
       .pipe(
         Effect.timeout("15 seconds"),

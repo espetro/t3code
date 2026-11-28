@@ -170,8 +170,8 @@ const make = Effect.gen(function* () {
         return { status: "stale" as const };
       }
 
-      const project = yield* projects.get(projection.thread.projectId);
-      if (Option.isNone(project)) {
+      const project = Option.getOrUndefined(yield* projects.get(projection.thread.projectId));
+      if (project === undefined) {
         return { status: "failed" as const, message: "This thread's project no longer exists." };
       }
 
@@ -225,9 +225,9 @@ const make = Effect.gen(function* () {
         worktreePath !== null &&
         (yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => false)));
       const result = yield* textGeneration.generateThreadTitle({
-        cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
+        cwd: worktreeExists ? worktreePath : project.workspaceRoot,
         message: context.message,
-        projectTitle: project.value.title,
+        projectTitle: project.title,
         attachments: context.attachments,
         ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
         ...(inherited === undefined ? {} : { forkSource: inherited }),

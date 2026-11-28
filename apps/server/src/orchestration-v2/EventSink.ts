@@ -774,7 +774,8 @@ const layerBase: Layer.Layer<
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(function* (commandId: CommandId) {
         const existing = yield* commandReceipts.getByCommandId(commandId);
-        if (Option.isNone(existing)) {
+        const receipt = Option.getOrUndefined(existing);
+        if (receipt === undefined) {
           return yield* Effect.die(
             new Error(`Command receipt ${commandId} disappeared during its transaction.`),
           );
@@ -783,7 +784,7 @@ const layerBase: Layer.Layer<
           Stream.runCollect,
           Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),
         );
-        return { receipt: existing.value, storedEvents };
+        return { receipt, storedEvents };
       });
 
     const commitCommandEffect = Effect.fn("orchestrationV2.EventSink.commitCommand")(function* (

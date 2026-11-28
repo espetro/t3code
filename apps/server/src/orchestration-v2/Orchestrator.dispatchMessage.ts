@@ -938,10 +938,12 @@ export const bindDispatchMessage = (ctx: any) =>
         const session = yield* providerSessions
           .get(providerThread.providerSessionId)
           .pipe(Effect.orElseSucceed(() => Option.none()));
+        const sessionRuntime = Option.getOrUndefined(session);
         if (
-          Option.isSome(session) &&
-          session.value.providerSession.capabilities.turns.supportsActiveSteering &&
-          session.value.providerSession.capabilities.turns.activeSteeringInterruptsTools !== true &&
+          sessionRuntime !== undefined &&
+          sessionRuntime.providerSession.capabilities.turns.supportsActiveSteering &&
+          sessionRuntime.providerSession.capabilities.turns.activeSteeringInterruptsTools !==
+            true &&
           !(yield* stopReachedRun(command, command.threadId, active.id))
         ) {
           dispatchMode = { type: "steer_active", targetRunId: active.id };

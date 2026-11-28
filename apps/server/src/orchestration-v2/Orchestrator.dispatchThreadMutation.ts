@@ -490,6 +490,7 @@ export const bindDispatchThreadMutation = (ctx: any) =>
     }
     if (command.type === "thread.pull-request.sync") {
       const project = yield* projects.get(command.projectId).pipe(mapDispatchError(command));
+      const projectRow = Option.getOrUndefined(project);
       const currentSequence = yield* eventSink.latestSequence({ threadId: command.threadId }).pipe(
         Effect.mapError(
           (cause) =>
@@ -500,9 +501,9 @@ export const bindDispatchThreadMutation = (ctx: any) =>
         ),
       );
       if (
-        Option.isNone(project) ||
-        project.value.deletedAt !== null ||
-        project.value.workspaceRoot !== command.expected.workspaceRoot ||
+        projectRow === undefined ||
+        projectRow.deletedAt !== null ||
+        projectRow.workspaceRoot !== command.expected.workspaceRoot ||
         // A replacement rewrites pullRequests, which the expected fields do not capture.
         (command.linkedPullRequest !== undefined && currentSequence > command.snapshotSequence) ||
         thread.projectId !== command.projectId ||
@@ -784,24 +785,25 @@ export const bindDispatchThreadMutation = (ctx: any) =>
         command.restoreUnsettledAt === null
           ? Option.some(null)
           : DateTime.make(command.restoreUnsettledAt);
-      if (Option.isNone(parsed)) {
+      const parsedUnsettledAt = Option.getOrUndefined(parsed);
+      if (parsedUnsettledAt === undefined && command.restoreUnsettledAt !== null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Thread ${command.threadId} unsettle anchor ${command.restoreUnsettledAt} is not a valid time.`,
         });
       }
-      restoredUnsettledAt = parsed.value;
+      restoredUnsettledAt = command.restoreUnsettledAt === null ? null : parsedUnsettledAt;
     }
     let snoozedUntil: DateTime.Utc | null = null;
     if (command.type === "thread.snooze") {
       const projection = yield* loadProjectionForCommand(command, ["runs", "runtimeRequests"], {
         turnItemTypes: [],
       });
-      const parsedSnoozedUntil = DateTime.make(command.snoozedUntil);
+      const parsedSnoozedUntil = Option.getOrUndefined(DateTime.make(command.snoozedUntil));
       if (
-        Option.isNone(parsedSnoozedUntil) ||
-        DateTime.toEpochMillis(parsedSnoozedUntil.value) <= DateTime.toEpochMillis(now)
+        parsedSnoozedUntil === undefined ||
+        DateTime.toEpochMillis(parsedSnoozedUntil) <= DateTime.toEpochMillis(now)
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -857,7 +859,7 @@ export const bindDispatchThreadMutation = (ctx: any) =>
           cause: `Thread ${command.threadId} has a queued run and cannot be snoozed.`,
         });
       }
-      snoozedUntil = parsedSnoozedUntil.value;
+      snoozedUntil = parsedSnoozedUntil;
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
@@ -1539,7 +1541,8 @@ export const bindDispatchThreadMutation = (ctx: any) =>
               }),
           ),
         );
-        if (Option.isSome(session) && session.value.applyModelSelection !== undefined) {
+        const sessionRuntime = Option.getOrUndefined(session);
+        if (sessionRuntime !== undefined && sessionRuntime.applyModelSelection !== undefined) {
           yield* Ref.update(effects, (existing) => [
             ...existing,
             {

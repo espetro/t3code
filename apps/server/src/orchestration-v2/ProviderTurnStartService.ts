@@ -1087,12 +1087,13 @@ export const layer: Layer.Layer<
       let providerTurns = projection.providerTurns;
       if (abandonedTurn !== undefined) {
         const liveSession = yield* providerSessions.get(providerSessionId);
-        if (Option.isSome(liveSession)) {
+        const liveSessionRuntime = Option.getOrUndefined(liveSession);
+        if (liveSessionRuntime !== undefined) {
           // The run already ended without stopping its provider — a failed start, an
           // ignored Stop, or an interrupt that never confirmed. Recover that exact
           // turn before reusing its native conversation.
           const recovered = yield* Effect.result(
-            liveSession.value.interruptTurn({
+            liveSessionRuntime.interruptTurn({
               providerThread,
               providerTurnId: abandonedTurn.id,
               requestRuntimeRestart: true,

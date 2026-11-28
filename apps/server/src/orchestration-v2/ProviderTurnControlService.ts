@@ -254,9 +254,9 @@ export const layer: Layer.Layer<
           ) {
             return;
           }
-          const session = yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session) || session.value.applyModelSelection === undefined) return;
-          yield* session.value.applyModelSelection({
+          const session = Option.getOrUndefined(yield* sessions.get(input.providerSessionId));
+          if (session === undefined || session.applyModelSelection === undefined) return;
+          yield* session.applyModelSelection({
             providerThread,
             modelSelection: input.modelSelection,
           });
@@ -270,17 +270,20 @@ export const layer: Layer.Layer<
           (candidate) => candidate.id === thread.activeProviderThreadId,
         );
         if (!providerThread?.providerSessionId) return;
-        const session = yield* sessions.get(providerThread.providerSessionId);
-        if (Option.isNone(session) || session.value.applyThreadTitle === undefined) return;
-        yield* session.value.applyThreadTitle({ providerThread, title: input.title });
+        const session = Option.getOrUndefined(
+          yield* sessions.get(providerThread.providerSessionId),
+        );
+        if (session === undefined || session.applyThreadTitle === undefined) return;
+        yield* session.applyThreadTitle({ providerThread, title: input.title });
       }),
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {
           const loaded = yield* load({ ...input, operation: "interrupt" });
-          const session = Option.isSome(loaded.session)
+          const sessionOption = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) {
+          const session = Option.getOrUndefined(sessionOption);
+          if (session === undefined) {
             if (input.subagent !== undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,
@@ -292,7 +295,7 @@ export const layer: Layer.Layer<
             return;
           }
           if (input.subagent !== undefined) {
-            if (session.value.stopSubagent === undefined) {
+            if (session.stopSubagent === undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,
                 operation: "interrupt",
@@ -300,7 +303,7 @@ export const layer: Layer.Layer<
                 cause: "The provider does not support stopping a native subagent.",
               });
             }
-            return yield* session.value.stopSubagent({
+            return yield* session.stopSubagent({
               providerThread: loaded.providerThread,
               nativeTaskId: input.subagent.nativeTaskId,
               ...(input.subagent.requestedAt === undefined
@@ -309,7 +312,7 @@ export const layer: Layer.Layer<
             });
           }
           // Settled turns still reach adapters, which alone know whether background work remains.
-          yield* session.value
+          yield* session
             .interruptTurn({
               providerThread: loaded.providerThread,
               providerTurnId: loaded.providerTurn.id,
@@ -354,7 +357,8 @@ export const layer: Layer.Layer<
       interruptAndAwaitTerminal: Effect.fn("ProviderTurnControlService.interruptAndAwaitTerminal")(
         function* (input) {
           const loaded = yield* load({ ...input, operation: "restart" });
-          if (Option.isNone(loaded.session)) {
+          const session = Option.getOrUndefined(loaded.session);
+          if (session === undefined) {
             // Without a live adapter, no terminal event can arrive; proceed to detach/start without polling.
             if (loaded.providerTurn.status === "running") {
               yield* Effect.logWarning(
@@ -369,7 +373,7 @@ export const layer: Layer.Layer<
             return;
           }
 
-          yield* loaded.session.value.interruptTurn({
+          yield* session.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
           });
@@ -433,7 +437,8 @@ export const layer: Layer.Layer<
               return;
           }
           const loaded = yield* load({ ...input, operation: "steer" });
-          if (Option.isNone(loaded.session)) return;
+          const session = Option.getOrUndefined(loaded.session);
+          if (session === undefined) return;
           const { message, run } = loaded.context;
           if (message === undefined || run === undefined) {
             return yield* new ProviderTurnControlError({
@@ -447,7 +452,7 @@ export const layer: Layer.Layer<
             mcpAppModelContext,
             input.threadId,
           );
-          yield* loaded.session.value
+          yield* session
             .steerTurn({
               threadId: input.threadId,
               runId: run.id,

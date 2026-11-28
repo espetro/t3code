@@ -490,24 +490,27 @@ export const layerWithOptions = (
       const installationGate = yield* ProviderInstallationGate.ProviderInstallationGate;
       // Labs flag, read live: Codex per turn (its shared session outlives a toggle), Claude per query.
       // Unreadable settings keep it off.
-      const promptSuggestionsEnabled = Option.isNone(serverSettings)
-        ? Effect.succeed(false)
-        : serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.promptSuggestionsEnabled),
-            Effect.orElseSucceed(() => false),
-          );
+      const serverSettingsService = Option.getOrUndefined(serverSettings);
+      const promptSuggestionsEnabled =
+        serverSettingsService === undefined
+          ? Effect.succeed(false)
+          : serverSettingsService.getSettings.pipe(
+              Effect.map((settings) => settings.promptSuggestionsEnabled),
+              Effect.orElseSucceed(() => false),
+            );
       // Read per turn, so the feedback instruction follows the setting without a restart.
-      const agentFeedbackMode = Option.isNone(serverSettings)
-        ? Effect.succeed("off" as const)
-        : serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.agentFeedback.mode),
-            Effect.orElseSucceed(() => "off" as const),
-          );
+      const agentFeedbackMode =
+        serverSettingsService === undefined
+          ? Effect.succeed("off" as const)
+          : serverSettingsService.getSettings.pipe(
+              Effect.map((settings) => settings.agentFeedback.mode),
+              Effect.orElseSucceed(() => "off" as const),
+            );
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
-          if (Option.isNone(serverSettings)) return { browser: true, device: false };
+          if (serverSettingsService === undefined) return { browser: true, device: false };
           return yield* Effect.gen(function* () {
-            const settings = yield* serverSettings.value.getSettings;
+            const settings = yield* serverSettingsService.getSettings;
             const thread = yield* projectionStore.getThread(threadId);
             const entries = Object.values(settings.projectSettingsOverrides);
             const browserOverridden = entries.some(
@@ -517,9 +520,11 @@ export const layerWithOptions = (
               (entry) => entry.enableAgentDeviceAccess !== undefined,
             );
             if (browserOverridden || deviceOverridden) {
-              const project = Option.isSome(projectService)
-                ? yield* projectService.value.getById(thread.projectId)
-                : Option.none();
+              const projectSvc = Option.getOrUndefined(projectService);
+              const project =
+                projectSvc === undefined
+                  ? Option.none()
+                  : yield* projectSvc.getById(thread.projectId);
               if (Option.isNone(project))
                 return {
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
@@ -545,8 +550,8 @@ export const layerWithOptions = (
         },
       );
       const readLinkedEnvironments = Effect.gen(function* () {
-        if (options.configureMcp === false || Option.isNone(serverSettings)) return undefined;
-        return yield* serverSettings.value.getSettings.pipe(
+        if (options.configureMcp === false || serverSettingsService === undefined) return undefined;
+        return yield* serverSettingsService.getSettings.pipe(
           Effect.map((settings) => settings.linkedEnvironmentsEnabled),
           Effect.orElseSucceed(() => null),
         );
@@ -665,8 +670,13 @@ export const layerWithOptions = (
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
                     // A failed capability read cannot tell that the live credential is wrong.
-                    (Option.isNone(backgroundWait) ||
-                      resolved.capabilities.has("background-wait") === backgroundWait.value) &&
+                    (() => {
+                      const backgroundWaitValue = Option.getOrUndefined(backgroundWait);
+                      return (
+                        backgroundWaitValue === undefined ||
+                        resolved.capabilities.has("background-wait") === backgroundWaitValue
+                      );
+                    })() &&
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent
                   ) {
@@ -1596,8 +1606,9 @@ export const layerWithOptions = (
                     yield* retryReleaseRecords(records);
                     return yield* recorded;
                   }
-                  if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
-                    return yield* Effect.failCause(closeExit.value.cause);
+                  const closeExitValue = Option.getOrUndefined(closeExit);
+                  if (closeExitValue !== undefined && Exit.isFailure(closeExitValue)) {
+                    return yield* Effect.failCause(closeExitValue.cause);
                   }
                 }).pipe(
                   withMetrics({
@@ -3548,14 +3559,15 @@ export const layerWithOptions = (
                   "providerTurns",
                 ]),
               );
-              if (Option.isSome(projection)) {
+              const projectionRecords = Option.getOrUndefined(projection);
+              if (projectionRecords !== undefined) {
                 const providerThreads = new Map(
-                  projection.value.providerThreads
+                  projectionRecords.providerThreads
                     .filter((thread) => thread.providerSessionId === input.providerSessionId)
                     .map((thread) => [thread.id, thread] as const),
                 );
                 detachedProviderThreads = [...providerThreads.values()];
-                const activeTurns = projection.value.providerTurns.filter(
+                const activeTurns = projectionRecords.providerTurns.filter(
                   (turn) => turn.status === "running" && providerThreads.has(turn.providerThreadId),
                 );
                 yield* Effect.forEach(
@@ -3635,22 +3647,23 @@ export const layerWithOptions = (
                 updated,
               ] as const;
             });
-            if (Option.isSome(detachResult)) {
-              yield* Effect.forEach(detachResult.value.idleUnloadFibers, cancelIdleFiber, {
+            const detachedUpdate = Option.getOrUndefined(detachResult);
+            if (detachedUpdate !== undefined) {
+              yield* Effect.forEach(detachedUpdate.idleUnloadFibers, cancelIdleFiber, {
                 discard: true,
               });
             }
-            const detached = Option.map(detachResult, (result) => result.entry);
+            const detachedEntry = detachedUpdate?.entry;
             // Plain detaches preserve credentials held by live shared providers across workspace handoffs.
             if (input.revokeMcpCredential === true) {
               yield* clearMcpSession(input.threadId);
             }
-            if (Option.isNone(detached)) {
+            if (detachedEntry === undefined) {
               return;
             }
             if (
-              detached.value.attachedThreadIds.size === 0 &&
-              !detached.value.supportsMultipleProviderThreads
+              detachedEntry.attachedThreadIds.size === 0 &&
+              !detachedEntry.supportsMultipleProviderThreads
             ) {
               yield* releaseEntry({
                 providerSessionId: input.providerSessionId,
@@ -3660,8 +3673,8 @@ export const layerWithOptions = (
               });
               return;
             }
-            const unloadThread = detached.value.exposedRuntime.unloadThread;
-            if (detached.value.supportsMultipleProviderThreads && unloadThread !== undefined) {
+            const unloadThread = detachedEntry.exposedRuntime.unloadThread;
+            if (detachedEntry.supportsMultipleProviderThreads && unloadThread !== undefined) {
               // The projection includes native children owned by other app threads;
               // lock each owner so an attached child stays loaded and later attaches wait.
               for (const providerThread of detachedProviderThreads) {
@@ -3675,7 +3688,7 @@ export const layerWithOptions = (
                   Effect.gen(function* () {
                     const entry = (yield* Ref.get(sessions)).get(key);
                     if (
-                      entry?.runtime !== detached.value.runtime ||
+                      entry?.runtime !== detachedEntry.runtime ||
                       entry.attachedThreadIds.has(ownerThreadId)
                     ) {
                       return;

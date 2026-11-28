@@ -396,15 +396,14 @@ export const bindDispatchSteerIntoRun = (ctx: any) =>
           }),
       ),
     );
-    if (Option.isNone(sessionOption)) {
+    const session = Option.getOrUndefined(sessionOption);
+    if (session === undefined) {
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
         cause: `Provider session ${providerThread.providerSessionId} is not active.`,
       });
     }
-
-    const session = sessionOption.value;
     const now = yield* DateTime.now;
     const emitEvent = emit(input.events, input.command);
     const selectionChanged = !modelSelectionsEqual(targetRun.modelSelection, input.modelSelection);

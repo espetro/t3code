@@ -650,12 +650,20 @@ export const bindDispatchRunInterrupt = (ctx: any) =>
       });
     }
     const providerSessionId = providerThread.providerSessionId;
+    const session = Option.getOrUndefined(sessionOption);
+    if (session === undefined) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Provider session ${providerSessionId} is not active.`,
+      });
+    }
     yield* mapDispatchError(command)(
       commandPolicy.ensureInterrupt({
         commandId: command.commandId,
         threadId: command.threadId,
         providerInstanceId: run.providerInstanceId,
-        capabilities: sessionOption.value.providerSession.capabilities,
+        capabilities: session.providerSession.capabilities,
       }),
     );
 

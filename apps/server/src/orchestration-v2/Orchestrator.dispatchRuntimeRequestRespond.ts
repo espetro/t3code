@@ -604,9 +604,10 @@ export const bindDispatchRuntimeRequestRespond = (ctx: any) =>
                 }),
             ),
           );
+        const activeSessionRuntime = Option.getOrUndefined(activeSession);
         if (
-          Option.isSome(activeSession) &&
-          activeSession.value.providerSession.capabilities.turns.supportsActiveSteering
+          activeSessionRuntime !== undefined &&
+          activeSessionRuntime.providerSession.capabilities.turns.supportsActiveSteering
         ) {
           dispatchMode = { type: "steer_active", targetRunId: activeRun.id };
         }

@@ -909,19 +909,21 @@ export const layerWithOptions = (
       const runOnce = Effect.fnUntraced(
         function* (filter: ClaimFilter = {}) {
           const claimExit = yield* Effect.exit(outbox.claimNext({ workerId, ...filter }));
+          let claimResult: (typeof claimExit extends Exit.Exit<infer A, unknown> ? A : never) | undefined;
+          let claimFailed = false;
+          if (Exit.isFailure(claimExit)) {
+            claimFailed = true;
+          } else {
+            claimResult = Option.getOrUndefined(claimExit.value);
+          }
           yield* increment(orchestrationEffectClaimsTotal, {
-            result: Exit.isFailure(claimExit)
-              ? "error"
-              : Option.isNone(claimExit.value)
-                ? "empty"
-                : "claimed",
+            result: claimFailed ? "error" : claimResult === undefined ? "empty" : "claimed",
           });
-          if (Exit.isFailure(claimExit)) return yield* Effect.failCause(claimExit.cause);
-          const claimed = claimExit.value;
-          if (Option.isNone(claimed)) {
+          if (claimFailed) return yield* Effect.failCause(claimExit.cause);
+          if (claimResult === undefined) {
             return false;
           }
-          const effect = claimed.value;
+          const effect = claimResult;
           // Arm cancellation before rereading durable state to close the read-to-registration race.
           const cancellation = outbox
             .awaitCancellation(effect.id)

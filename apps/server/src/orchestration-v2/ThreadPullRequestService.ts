@@ -104,9 +104,8 @@ export function projectWorkspaceMatchesSnapshot(
   currentProject: Option.Option<Pick<OrchestrationProjectShell, "workspaceRoot">>,
   expectedWorkspaceRoot: string,
 ): boolean {
-  return (
-    Option.isSome(currentProject) && currentProject.value.workspaceRoot === expectedWorkspaceRoot
-  );
+  const project = Option.getOrUndefined(currentProject);
+  return project !== undefined && project.workspaceRoot === expectedWorkspaceRoot;
 }
 
 const BACKFILL_ATTEMPTS = 5;
