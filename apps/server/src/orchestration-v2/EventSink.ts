@@ -1142,11 +1142,7 @@ const layerBase: Layer.Layer<
     const coordinator = yield* ProviderCommitBatch.make(
       (work) =>
         withProviderBatch(work).pipe(
-          Effect.mapError((cause) =>
-            ProviderCommitBatch.isCommitBatchError(cause)
-              ? cause
-              : new ProviderCommitBatch.CommitBatchError({ cause }),
-          ),
+          Effect.mapError((cause) => new ProviderCommitBatch.CommitBatchError({ cause })),
         ),
       yield* ProviderCommitBatch.enabled,
       // Each snapshot owns a savepoint and its deferred publications within the shared commit.
@@ -1172,11 +1168,7 @@ const layerBase: Layer.Layer<
               }
             }),
           ),
-          Effect.mapError((cause) =>
-            ProviderCommitBatch.isCommitBatchError(cause)
-              ? cause
-              : new ProviderCommitBatch.CommitBatchError({ cause }),
-          ),
+          Effect.mapError((cause) => new ProviderCommitBatch.CommitBatchError({ cause })),
         );
       }),
       threadViewers.isViewed,

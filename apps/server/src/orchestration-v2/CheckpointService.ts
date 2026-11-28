@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+
 import { isGitImport, parseTurnDiffFilesFromNumstat } from "../checkpointing/Diffs.ts";
 import type { CheckpointStoreError } from "../checkpointing/Errors.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -115,8 +116,6 @@ export const CheckpointServiceV2Error = Schema.Union([
   CheckpointDeleteStaleRefsError,
 ]);
 export type CheckpointServiceV2Error = typeof CheckpointServiceV2Error.Type;
-
-const isCheckpointRestoreError = Schema.is(CheckpointRestoreError);
 
 /** Per scope, the other scopes' folders inside its own: relative, `/`-separated. */
 type NestedScopePaths = ReadonlyMap<CheckpointScopeId, ReadonlyArray<string>>;
@@ -860,9 +859,7 @@ export const layer: Layer.Layer<
       function* (input) {
         type Target = (typeof input.targets)[number];
         const failed = (target: Target, cause: unknown) =>
-          isCheckpointRestoreError(cause)
-            ? Effect.succeed(cause)
-            : Effect.map(
+          Effect.map(
                 checkpointIdForScopeOrdinal(idAllocator, {
                   scopeId: target.scope.id,
                   ordinalWithinScope: target.checkpoint.ordinalWithinScope,

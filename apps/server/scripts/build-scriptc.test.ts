@@ -28,6 +28,7 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain("exactOptionalPropertyTypes: false");
   expect(script).toContain("descendantCheckerPids");
   expect(script).toContain("SCRIPTC_LIBNODE");
+  expect(script).toContain('T3_SCRIPTC_NATIVE: "1"');
   expect(script).toContain("SIGKILL checker pids");
   expect(script).toContain("#t3/built-in-drivers");
   expect(script).toContain("builtInDrivers.native.ts");

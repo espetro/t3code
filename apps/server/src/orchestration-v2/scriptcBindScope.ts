@@ -1,5 +1,13 @@
 import * as Effect from "effect/Effect";
 
+export const errorTag = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null) return undefined;
+  const tag = Reflect.get(value, "_tag");
+  return typeof tag === "string" ? tag : undefined;
+};
+
+export const taggedError = (value: unknown, tag: string): boolean => errorTag(value) === tag;
+
 /** Read a factory scope bag without throwing on inner-only identifiers (scriptc#4381 splits). */
 export const pickScriptcBindCtx = (ctx: object) =>
   new Proxy(ctx, {

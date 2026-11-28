@@ -365,6 +365,7 @@ async function main(): Promise<number> {
         stdio: "inherit",
         env: {
           ...process.env,
+          T3_SCRIPTC_NATIVE: "1",
           SCRIPTC_CHECKER: process.env.SCRIPTC_CHECKER ?? "tsgo",
           SCRIPTC_CHECKER_SERVER: "0",
           GOMAXPROCS: process.env.GOMAXPROCS ?? "1",

@@ -637,7 +637,6 @@ function latestSteerableRun(
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
 const FORCE_STOP_REASON = "Force stopped by user";
 const FORCE_STOP_RELEASE_WAIT = "10 seconds";
-const isForceStopThreadError = Schema.is(OrchestrationV2ForceStopThreadError);
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -1614,10 +1613,8 @@ const make = Effect.gen(function* () {
     },
     (effect, input) =>
       effect.pipe(
-        Effect.mapError((cause) =>
-          isForceStopThreadError(cause)
-            ? cause
-            : new OrchestrationV2ForceStopThreadError({ threadId: input.threadId, cause }),
+        Effect.mapError(
+          (cause) => new OrchestrationV2ForceStopThreadError({ threadId: input.threadId, cause }),
         ),
       ),
   );

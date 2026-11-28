@@ -217,7 +217,10 @@ export function applyProviderInstanceMutation(
 const secretProviderConfigGuards = new Map(
   secretProviderDefinitions.definitions.map((definition) => [
     definition.kind as string,
-    Schema.is(definition.configSchema),
+    (value: unknown) =>
+      Schema.decodeUnknownOption(definition.configSchema)(value).pipe(
+        Option.match({ onNone: () => false, onSome: () => true }),
+      ),
   ]),
 );
 

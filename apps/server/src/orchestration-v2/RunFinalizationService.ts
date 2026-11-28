@@ -137,9 +137,9 @@ export const layerObserver = Layer.effect(
       "RunFinalizationService.refreshMissingRepositoryIdentity",
     )(
       function* (projectId: ProjectId) {
-        const project = yield* projects.getById(projectId);
-        if (Option.isNone(project)) return;
-        const { workspaceRoot } = project.value;
+        const project = Option.getOrUndefined(yield* projects.getById(projectId));
+        if (project === undefined) return;
+        const { workspaceRoot } = project;
         if ((yield* enrichment.readRepositoryIdentity(workspaceRoot)) !== null) return;
         yield* enrichment.refreshRepositoryIdentity(workspaceRoot);
       },

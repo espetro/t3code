@@ -63,8 +63,6 @@ export class CommandOutputHub extends Context.Service<CommandOutputHub, CommandO
   "t3/orchestration-v2/CommandOutputHub",
 ) {}
 
-const isCommandOutputError = Schema.is(OrchestrationV2CommandOutputError);
-
 function commandKey(target: CommandOutputTarget): string {
   return `${target.threadId}\u0000${target.itemId}`;
 }
@@ -286,13 +284,11 @@ export const make = Effect.gen(function* () {
         );
       }).pipe(
         Effect.mapError((cause) =>
-          isCommandOutputError(cause)
-            ? cause
-            : new OrchestrationV2CommandOutputError({
-                threadId: target.threadId,
-                message: "Failed to read command output.",
-                cause,
-              }),
+          new OrchestrationV2CommandOutputError({
+            threadId: target.threadId,
+            message: "Failed to read command output.",
+            cause,
+          }),
         ),
       ),
     );

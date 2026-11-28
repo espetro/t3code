@@ -14,8 +14,6 @@ export class V2DatabaseImportError extends Schema.TaggedError<V2DatabaseImportEr
   }
 }
 
-const isV2DatabaseImportError = Schema.is(V2DatabaseImportError);
-
 const isProcessAlive = (pid: number): boolean => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -97,10 +95,8 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
     );
   }).pipe(
     Effect.scoped,
-    Effect.mapError((cause) =>
-      isV2DatabaseImportError(cause)
-        ? cause
-        : new V2DatabaseImportError({ sourcePath, destinationPath, cause }),
+    Effect.mapError(
+      (cause) => new V2DatabaseImportError({ sourcePath, destinationPath, cause }),
     ),
   );
 });

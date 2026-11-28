@@ -23,6 +23,7 @@ import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { taggedError } from "./scriptcBindScope.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -48,8 +49,6 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
@@ -343,14 +342,12 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "interrupt",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),
@@ -407,14 +404,12 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "restart",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "restart",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),
@@ -497,7 +492,7 @@ export const layer: Layer.Layer<
               }),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
-                  if (isProviderTurnControlError(cause)) return yield* cause;
+                  if (taggedError(cause, "ProviderTurnControlError")) return yield* cause;
                   const current = yield* projections.getProviderControlContext(
                     input.threadId,
                     input,
@@ -517,14 +512,12 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isProviderTurnControlError(cause)
-                ? cause
-                : new ProviderTurnControlError({
-                    threadId: input.threadId,
-                    operation: "steer",
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+              new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause,
+              }),
             ),
           ),
       ),

@@ -294,11 +294,12 @@ export const layer: Layer.Layer<
           (yield* isManagedWorktreePath(worktreePath))
         ) {
           const project = yield* projects.get(context.thread.projectId);
-          if (Option.isSome(project)) {
-            const recreate = gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot }).pipe(
+          const projectRow = Option.getOrUndefined(project);
+          if (projectRow !== undefined) {
+            const recreate = gitWorkflow.pruneWorktrees({ cwd: projectRow.workspaceRoot }).pipe(
               Effect.andThen(
                 gitWorkflow.createWorktree({
-                  cwd: project.value.workspaceRoot,
+                  cwd: projectRow.workspaceRoot,
                   refName: branch,
                   path: worktreePath,
                 }),

@@ -262,12 +262,16 @@ function rowToApplicationStoredEvent(
   return row.aggregate_kind === "project" ? rowToProjectEvent(row) : rowToV2StoredEvent(row);
 }
 
-const isKnownProjectEventType = Schema.is(ProjectEventType);
+const knownProjectEventTypes = new Set<string>([
+  "project.created",
+  "project.meta-updated",
+  "project.deleted",
+]);
 
 const keepKnownEventTypeRow = (row: ApplicationEventRow) =>
   (
     row.aggregate_kind === "project"
-      ? isKnownProjectEventType(row.event_type)
+      ? knownProjectEventTypes.has(row.event_type)
       : isKnownOrchestrationV2EventType(row.event_type)
   )
     ? Effect.succeed(true)
@@ -298,10 +302,12 @@ function inferActorKind(event: UnsequencedProjectEvent): typeof ActorKind.Type {
 }
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): OrchestrationEventStoreError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
+  return (cause: unknown): OrchestrationEventStoreError => {
+    if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "SchemaError") {
+      return toPersistenceDecodeError(decodeOperation)(cause as Schema.SchemaError);
+    }
+    return toPersistenceSqlError(sqlOperation)(cause);
+  };
 }
 
 const makeEventStore = Effect.gen(function* () {

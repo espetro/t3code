@@ -71,6 +71,7 @@ import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import { isWithinRoot } from "../workspace/KnownWorkspaces.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
+import { taggedError } from "./scriptcBindScope.ts";
 
 // The agent waits for its branch name; a rate-limited provider would hold it for minutes.
 const BRANCH_NAME_TIMEOUT = "20 seconds";
@@ -273,13 +274,12 @@ export class ThreadLaunchService extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadLaunchService") {}
 
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
 function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
+  if (taggedError(error, "ThreadLaunchError")) {
+    const cause = Reflect.get(error, "cause");
+    const operation = String(Reflect.get(error, "operation") ?? "launch");
     const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
+    return `Workspace preparation failed during ${operation.replaceAll("-", " ")}: ${detail}`;
   }
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
 }

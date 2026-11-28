@@ -15,9 +15,6 @@ import { brokenRuntimeError } from "../provider/providerCompatibility.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-
-const isProviderSetupError = Schema.is(ProviderSetupError);
-
 export class ProviderAdapterRegistryLookupError extends Schema.TaggedError<ProviderAdapterRegistryLookupError>()(
   "ProviderAdapterRegistryLookupError",
   {
@@ -136,13 +133,11 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
                 });
                 return open.pipe(
                   Effect.mapError((cause) =>
-                    isProviderSetupError(cause)
-                      ? new ProviderAdapter.ProviderAdapterOpenSessionError({
-                          driver: adapter.driver,
-                          providerSessionId: input.providerSessionId,
-                          cause,
-                        })
-                      : cause,
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
+                      driver: adapter.driver,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
                   ),
                 );
               },

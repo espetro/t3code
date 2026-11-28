@@ -156,14 +156,17 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
 // SQLite retains text/blob bindings until rebind or finalization; node:sqlite cannot clear them.
 const LARGE_BINDING_SIZE = 64 * 1024;
 
-const isBlob = (value: unknown): value is ArrayBufferView | ArrayBufferLike =>
+const isBlobLike = (value: unknown): boolean =>
   ArrayBuffer.isView(value) || NodeUtil.types.isAnyArrayBuffer(value);
 
 const bindingSize = (value: unknown): number => {
   if (typeof value === "string") {
     return value.length;
   }
-  return isBlob(value) ? value.byteLength : 0;
+  if (isBlobLike(value)) {
+    return (value as ArrayBufferView | ArrayBufferLike).byteLength;
+  }
+  return 0;
 };
 
 const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
@@ -173,7 +176,7 @@ const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
       if (
         (typeof param === "object" || typeof param === "function") &&
         param !== null &&
-        !isBlob(param)
+        !isBlobLike(param)
       ) {
         // Named parameters may be callable objects; read data properties only to avoid invoking getters twice.
         for (const property of Object.values(Object.getOwnPropertyDescriptors(param))) {
@@ -248,6 +251,9 @@ const endsReadTransaction = (sql: string) => /^\s*ROLLBACK\b|^\s*COMMIT\b/i.test
 
 // WAL readers run concurrently; one worker serialized every read behind the slowest transaction.
 const READER_POOL_SIZE = 4;
+const READER_POOL_INDICES = [0, 1, 2, 3] as const;
+const scriptcNativeHost =
+  typeof process !== "undefined" && process.env.T3_SCRIPTC_NATIVE === "1";
 const READER_STARTUP_TIMEOUT = Duration.seconds(10);
 const READER_RETRY_DELAY = Duration.seconds(1);
 const READER_RETRY_MAX_DELAY = Duration.minutes(1);
@@ -829,6 +835,7 @@ const make = Effect.fn("makeWithDatabase")(function* (options: SqliteClientConfi
 
   const compiler = Statement.makeCompilerSqlite();
   const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
+  const enableWorkerPools = !scriptcNativeHost && isFileDatabase;
 
   const makeConnection = Effect.gen(function* () {
     const scope = yield* Effect.scope;
@@ -968,7 +975,7 @@ const make = Effect.fn("makeWithDatabase")(function* (options: SqliteClientConfi
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const writerWorker = options.writerWorker === true && isFileDatabase;
+  const writerWorker = options.writerWorker === true && enableWorkerPools;
   let checkpointAfterWrite: (() => void) | undefined;
   const writerConnection: Effect.Effect<Connection, SqlError> = writerWorker
     ? yield* makeWorkerConnection({
@@ -993,8 +1000,8 @@ const make = Effect.fn("makeWithDatabase")(function* (options: SqliteClientConfi
   }
   const readerPool = { unavailable: false };
   const readers =
-    options.readerWorker && isFileDatabase
-      ? yield* Effect.forEach(Array.from({ length: READER_POOL_SIZE }), () =>
+    options.readerWorker && enableWorkerPools
+      ? yield* Effect.forEach(READER_POOL_INDICES, () =>
           Effect.map(
             Effect.all([makeReader(options.filename, readerPool), Semaphore.make(1)]),
             ([acquire, lock]) => ({

@@ -46,8 +46,6 @@ export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<Run
   }
 }
 
-const isRuntimeRequestResponseExecutionError = Schema.is(RuntimeRequestResponseExecutionError);
-
 export interface RuntimeRequestServiceV2Shape {
   readonly respond: (input: {
     readonly threadId: ThreadId;
@@ -125,15 +123,13 @@ export const layer: Layer.Layer<
         (effect, input) =>
           effect.pipe(
             Effect.mapError((cause) =>
-              isRuntimeRequestResponseExecutionError(cause)
-                ? cause
-                : new RuntimeRequestResponseExecutionError({
-                    reason: "unexpected-failure",
-                    threadId: input.threadId,
-                    providerSessionId: input.providerSessionId,
-                    requestId: input.requestId,
-                    cause,
-                  }),
+              new RuntimeRequestResponseExecutionError({
+                reason: "unexpected-failure",
+                threadId: input.threadId,
+                providerSessionId: input.providerSessionId,
+                requestId: input.requestId,
+                cause,
+              }),
             ),
           ),
       ),

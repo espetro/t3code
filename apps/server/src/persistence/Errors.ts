@@ -1,4 +1,3 @@
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
@@ -69,23 +68,24 @@ export class PersistenceDecodeError extends Schema.TaggedError<PersistenceDecode
 
 function sqliteCondition(cause: unknown): string | undefined {
   let value = cause;
-  for (let depth = 0; depth < 4 && Predicate.isObject(value); depth += 1) {
-    if (
-      "errcode" in value &&
-      typeof value.errcode === "number" &&
-      "errstr" in value &&
-      typeof value.errstr === "string"
-    ) {
-      return `SQLITE(${value.errcode}) ${value.errstr}`;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof value !== "object" || value === null) return undefined;
+    const errcode = Reflect.get(value, "errcode");
+    const errstr = Reflect.get(value, "errstr");
+    if (typeof errcode === "number" && typeof errstr === "string") {
+      return `SQLITE(${errcode}) ${errstr}`;
     }
-    value = "cause" in value ? value.cause : undefined;
+    value = Reflect.get(value, "cause");
   }
   return undefined;
 }
 
 // Keep rejected payloads out of diagnostics; report only schema issue tags or normalized driver conditions.
 function describeSqlCause(cause: unknown): string | undefined {
-  if (Schema.isSchemaError(cause)) return summarizeSchemaIssue(cause.issue);
+  if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "SchemaError") {
+    const issue = Reflect.get(cause, "issue");
+    if (issue !== undefined) return summarizeSchemaIssue(issue as SchemaIssue.Issue);
+  }
   return sqliteCondition(cause);
 }
 

@@ -10,6 +10,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import { taggedError } from "./scriptcBindScope.ts";
+
 const MAX_EVENTS = 64;
 const MAX_BYTES = 1024 * 1024;
 // While another write waits, a shared transaction stops taking jobs after this long.
@@ -69,7 +71,7 @@ export interface StreamPriority {
 export class CommitBatchError extends Schema.TaggedError<CommitBatchError>()("CommitBatchError", {
   cause: Schema.Defect(),
 }) {}
-export const isCommitBatchError = Schema.is(CommitBatchError);
+export const isCommitBatchError = (error: unknown) => taggedError(error, "CommitBatchError");
 
 interface StreamState {
   readonly owner: { active: boolean };

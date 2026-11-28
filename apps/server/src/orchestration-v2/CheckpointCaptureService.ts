@@ -23,6 +23,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeInterruptResultTurnItem } from "./runInterruptResult.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { taggedError } from "./scriptcBindScope.ts";
 
 // Git processes are already capped server-wide; this keeps one thread from taking every slot.
 const REPOSITORY_CAPTURE_CONCURRENCY = 6;
@@ -36,8 +37,6 @@ export class CheckpointCaptureExecutionError extends Schema.TaggedError<Checkpoi
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-const isCheckpointCaptureExecutionError = Schema.is(CheckpointCaptureExecutionError);
 
 export interface CheckpointCaptureServiceV2Shape {
   readonly execute: (input: {
@@ -411,10 +410,8 @@ export const layer: Layer.Layer<
     return CheckpointCaptureServiceV2.of({
       execute: Effect.fn("CheckpointCaptureServiceV2.execute")(function (input) {
         return execute(input).pipe(
-          Effect.mapError((cause) =>
-            isCheckpointCaptureExecutionError(cause)
-              ? cause
-              : new CheckpointCaptureExecutionError({ ...input, cause }),
+          Effect.mapError(
+            (cause) => new CheckpointCaptureExecutionError({ ...input, cause }),
           ),
         );
       }),
