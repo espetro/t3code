@@ -86,7 +86,15 @@ export const make = Effect.gen(function* () {
       );
       if (managed.some(within)) return true;
 
-      const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
+      const projects = yield* projectStore.listShells().pipe(
+        Effect.orElseSucceed(
+          (): ReadonlyArray<{
+            readonly id: string;
+            readonly workspaceRoot: string;
+            readonly trackedFolders?: ReadonlyArray<{ readonly path: string }>;
+          }> => [],
+        ),
+      );
       for (const project of projects) {
         if (within(yield* resolveRoot(project.workspaceRoot))) return true;
       }
@@ -116,7 +124,9 @@ export const make = Effect.gen(function* () {
         if (project === undefined) return false;
         let listed = projectWorktrees.get(projectId);
         if (listed === undefined) {
-          listed = yield* git.listWorktreePaths(project.workspaceRoot).pipe(
+          const listWorktreePaths = git.listWorktreePaths;
+          if (typeof listWorktreePaths !== "function") return false;
+          listed = yield* listWorktreePaths(project.workspaceRoot).pipe(
             Effect.flatMap((paths) => Effect.forEach(paths, resolveRoot)),
             Effect.map((paths) => paths.filter((listedPath) => listedPath !== null)),
             Effect.orElseSucceed((): ReadonlyArray<string> => []),

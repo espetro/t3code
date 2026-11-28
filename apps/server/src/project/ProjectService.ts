@@ -455,7 +455,10 @@ export const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(dispatchError));
     if (outcome === null) return;
-    if ("refused" in outcome) return yield* Effect.failCause(outcome.refused);
+    if ("refused" in outcome) {
+      if (outcome.refused === undefined) return;
+      return yield* Effect.failCause(outcome.refused);
+    }
     const { receipt } = outcome;
     if (receipt.projectId !== projectId || receipt.commandType !== initial.type) {
       return yield* dispatchError(

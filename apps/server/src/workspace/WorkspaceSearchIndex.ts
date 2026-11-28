@@ -61,7 +61,7 @@ function nativeFileFinder(): FileFinderStatic | undefined {
   return fileFinderClass ?? undefined;
 }
 
-const emptyFinder: FileFinderType = {
+const emptyFinder = {
   destroy() {},
   waitForIndexReady: async () => ({ ok: true, value: true }),
   getScanProgressAsync: async () => ({
@@ -90,7 +90,7 @@ const emptyFinder: FileFinderType = {
       nextCursor: null,
     },
   }),
-} as FileFinderType;
+} as unknown as FileFinderType;
 
 // A glob intersects existing extension constraints; fff ORs bare `*.ext` constraints together.
 const IMAGE_SEARCH_CONSTRAINT = `**/*.{${PROJECT_FAVICON_EXTENSIONS.map((extension) =>

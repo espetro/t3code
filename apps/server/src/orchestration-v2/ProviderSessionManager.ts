@@ -979,6 +979,17 @@ export const layerWithOptions = (
       // Read the session's provider threads as soon as it leaves the live map, before a
       // replacement reports its own tasks. Keep OpenCode's background work: its background
       // subagents share a server and can outlive the session.
+      type ReleasedProviderThread = {
+        readonly threadId: ThreadId;
+        readonly providerSessionId: ProviderSessionId;
+        readonly providerThreadId: ProviderThreadId;
+        readonly driver: OrchestrationV2ProviderThread["driver"];
+        readonly taskIds: Set<
+          NonNullable<OrchestrationV2ProviderThread["pendingBackgroundTasks"]>[number]["taskId"]
+        >;
+        readonly lostTasks: NonNullable<OrchestrationV2ProviderThread["pendingBackgroundTasks"]>;
+        readonly lostItems: ReadonlyArray<OrchestrationV2TurnItem>;
+      };
       const readReleasedProviderThreads = Effect.fn(
         "ProviderSessionManager.readReleasedProviderThreads",
       )(
@@ -991,10 +1002,10 @@ export const layerWithOptions = (
             input.reason === "server_shutdown" ||
             input.entry.runtime.backgroundTasksEndWithProcess !== true
           ) {
-            return [];
+            return [] as ReleasedProviderThread[];
           }
           const providerSessionId = input.entry.runtime.providerSessionId;
-          const released = [];
+          const released: ReleasedProviderThread[] = [];
           for (const threadId of releasedThreadIds(input)) {
             const projection = yield* projectionStore.getThreadRecords(threadId, [
               "providerThreads",
@@ -1040,13 +1051,10 @@ export const layerWithOptions = (
               Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
                 providerSessionId: input.entry.runtime.providerSessionId,
                 cause,
-              }).pipe(Effect.as([])),
+              }).pipe(Effect.as([] as ReleasedProviderThread[])),
             ),
           ),
       );
-      type ReleasedProviderThread = Effect.Success<
-        ReturnType<typeof readReleasedProviderThreads>
-      >[number];
 
       // Dead processes cannot report task endings; stale rosters keep threads Waiting.
       const writeReleasedRosterEvents = Effect.fn(
@@ -1204,14 +1212,16 @@ export const layerWithOptions = (
             const now = yield* DateTime.now;
             const allocateEventId = () =>
               idAllocator.allocate.event({ threadId, providerSessionId });
-            const events = yield* endOrphanedNativeSubagent({
-              projection,
-              subagentId: subagent.id,
-              status: "interrupted",
-              now,
-              emitted: [],
-              allocateEventId,
-            });
+            const events: OrchestrationV2DomainEvent[] = [
+              ...(yield* endOrphanedNativeSubagent({
+                projection,
+                subagentId: subagent.id,
+                status: "interrupted",
+                now,
+                emitted: [] as OrchestrationV2DomainEvent[],
+                allocateEventId,
+              })),
+            ];
             if (subagent.childThreadId !== null) {
               const child = yield* projectionStore
                 .getThreadRecords(subagent.childThreadId, ["nodes", "providerTurns", "turnItems"], {
@@ -2964,21 +2974,13 @@ export const layerWithOptions = (
           return {
             settled,
             event: {
-              type: "turn.terminal",
-              driver: event.driver,
-              providerThreadId: event.providerThreadId,
-              providerTurnId: event.providerTurnId,
-              runOrdinal: event.runOrdinal,
-              failureItemOrdinal: stalled.ordinal,
-              failureItemId: stalled.id,
-              status: "failed",
+              ...event,
+              status: "failed" as const,
               failure: { ...stalled.failure, retryable: false },
               retry: stalled.retry,
+              failureItemOrdinal: stalled.ordinal,
+              failureItemId: stalled.id,
               ...(stalled.startedAt === null ? {} : { retryStartedAt: stalled.startedAt }),
-              threadDisposition: event.threadDisposition,
-              ...(event.retainedRuntimeRequestIds === undefined
-                ? {}
-                : { retainedRuntimeRequestIds: event.retainedRuntimeRequestIds }),
             },
           };
         };

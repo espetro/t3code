@@ -22,7 +22,11 @@ type NativeGitFn = (...args: ReadonlyArray<any>) => Effect.Effect<any, never, ne
 
 export class GitVcsDriver extends Context.Service<
   GitVcsDriver,
-  { readonly [key: string]: NativeGitFn }
+  {
+    readonly listWorktreePaths: (cwd: string) => Effect.Effect<string[]>;
+    readonly resolveBranchName: (cwd: string, ref: string) => Effect.Effect<string | null>;
+    readonly [key: string]: NativeGitFn;
+  }
 >()("t3/vcs/GitVcsDriver") {}
 
 export const layer = Layer.succeed(

@@ -823,16 +823,15 @@ export const layer: Layer.Layer<
             effect.pipe(
               Effect.tap((storedEvents) =>
                 Effect.gen(function* () {
-                  if (
-                    storedEvents.length === 0 ||
-                    input.event.type !== "turn.terminal" ||
-                    input.event.status !== "failed" ||
-                    input.event.failure.class !== "usage_limit"
-                  )
-                    return;
+                  if (storedEvents.length === 0) return;
+                  if (input.event.type !== "turn.terminal") return;
+                  if (input.event.status !== "failed") return;
+                  if (input.event.failure.class !== "usage_limit") return;
                   const instance = yield* instances.getInstance(input.providerInstanceId);
-                  if (!instance?.snapshot.refreshUsage) return;
-                  yield* instance.snapshot.refreshUsage.pipe(
+                  if (instance === undefined || instance === null) return;
+                  const refreshUsage = instance.snapshot.refreshUsage;
+                  if (refreshUsage === undefined) return;
+                  yield* refreshUsage.pipe(
                     Effect.ignoreCause({ log: true }),
                     Effect.forkIn(scope, { startImmediately: true }),
                   );
@@ -844,7 +843,8 @@ export const layer: Layer.Layer<
                   const created = storedEvents.find(
                     (stored) => stored.event.type === "thread.created",
                   );
-                  if (created?.event.type !== "thread.created") return storedEvents;
+                  if (created === undefined || created.event.type !== "thread.created")
+                    return storedEvents;
                   const child = created.event.payload;
                   if (child.worktreePath === null || child.branch === null) return storedEvents;
                   // Git renames before scanning committed threads. If that scan missed this

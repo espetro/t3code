@@ -4385,6 +4385,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ...(row.message_id === null ? {} : { messageId: MessageId.make(row.message_id) }),
       }));
     });
+    const timelineWhereAtOrAfter = (start: number, messagesOnly: boolean) =>
+      messagesOnly
+        ? sql`AND item.ordinal >= ${start}
+              AND item.type IN ('user_message', 'assistant_message', 'proposed_plan')`
+        : sql`AND item.ordinal >= ${start}`;
+    const timelineWhereBefore = (start: number) =>
+      sql`AND item.ordinal < ${start}
+                AND item.type IN ('user_message', 'assistant_message', 'proposed_plan')`;
+    const timelineLimit = (count: number) => sql`LIMIT ${count}`;
     const localTimelineRow = (item: TimelineIndexItem): TimelineIndexRow => ({
       sourceThreadId: item.threadId,
       sourceItemId: item.id,
@@ -4603,10 +4612,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       totalItems: number,
     ) {
       const threadId = local.records.thread.id;
+      const hiddenRows: ReadonlyArray<{
+        readonly ordinal: number;
+        readonly turn_item_id: string;
+      }> = local.hidden;
       if (options.itemId !== undefined) {
-        const found = (yield* local.read(sql`AND item.turn_item_id = ${options.itemId}`)).filter(
-          local.isVisible,
-        );
+        const found = (
+          (yield* local.read(sql`AND item.turn_item_id = ${options.itemId}`) as any) as any[]
+        ).filter(local.isVisible);
         const matching = yield* Effect.forEach(found, (item) =>
           local
             .visibleBefore(item.ordinal, item.id)
@@ -4622,22 +4635,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         SELECT ordinal FROM orchestration_v2_projection_turn_items
         WHERE thread_id = ${threadId}
         ORDER BY ordinal ASC, turn_item_id ASC LIMIT 1 OFFSET ${firstPosition}`;
-      const start = starts[0]?.ordinal;
-      if (start === undefined) return { matching: [], totalItems, hasEarlier: false };
-      const base = yield* local.visibleBefore(start);
-      const hiddenAfter = local.hidden.filter((row) => row.ordinal >= start).length;
+      const startRow = starts[0];
+      if (startRow === undefined) return { matching: [], totalItems, hasEarlier: false };
+      const start: number = Number(startRow.ordinal);
+      if (!Number.isFinite(start)) return { matching: [], totalItems, hasEarlier: false };
+      const base: number = Number(yield* local.visibleBefore(start));
+      const hiddenAfter = hiddenRows.filter((hiddenRow) => hiddenRow.ordinal >= start).length;
       const messagesOnly = options.view !== "activity";
-      const candidates = (yield* local.read(
-        messagesOnly
-          ? sql`AND item.ordinal >= ${start}
-              AND item.type IN ('user_message', 'assistant_message', 'proposed_plan')`
-          : sql`AND item.ordinal >= ${start}`,
-        sql`LIMIT ${firstPosition - base + Math.min(options.limit, totalItems) + 1 + hiddenAfter}`,
-      )).filter(local.isVisible);
+      const pageLimit: number = Number(options.limit);
+      const windowLimit: number =
+        firstPosition - base + Math.min(pageLimit, totalItems) + 1 + hiddenAfter;
+      const readCandidates = local.read(
+        timelineWhereAtOrAfter(start, messagesOnly),
+        timelineLimit(windowLimit),
+      );
+      const candidates = ((yield* readCandidates as any) as any[]).filter(local.isVisible);
       const positions = new Map<string, number>();
       const last = candidates.at(-1);
       if (messagesOnly && last !== undefined) {
-        const hiddenIds = new Set(local.hidden.map((row) => row.turn_item_id));
+        const hiddenIds = new Set(hiddenRows.map((row) => row.turn_item_id));
         const span = yield* sql<{ turn_item_id: string }>`
           SELECT turn_item_id FROM orchestration_v2_projection_turn_items
           WHERE thread_id = ${threadId} AND ordinal >= ${start} AND ordinal <= ${last.ordinal}
@@ -4657,11 +4673,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         matching.length < rows.length ||
         (base > 0 &&
           (!messagesOnly ||
-            (yield* local.read(
-              sql`AND item.ordinal < ${start}
-                AND item.type IN ('user_message', 'assistant_message', 'proposed_plan')`,
-              sql`LIMIT ${local.hidden.length + 1}`,
-            )).some(local.isVisible)));
+            (
+              (yield* local.read(
+                timelineWhereBefore(start),
+                timelineLimit(hiddenRows.length + 1),
+              ) as any) as any[]
+            ).some(local.isVisible)));
       return { matching, totalItems, hasEarlier };
     });
 
@@ -4698,13 +4715,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           { ...options, afterPosition: from, limit: span },
           totalItems,
         );
-        const before = read.matching.filter((row) => row.position < end);
+        const matching = read.matching as ReadonlyArray<{ readonly position: number }>;
+        const before = matching.filter((row) => row.position < end);
         if (before.length >= options.limit || from === afterPosition) {
           const page = before.slice(Math.max(0, before.length - options.limit));
           return {
             page,
             totalItems,
-            hasMore: read.matching.length > before.length,
+            hasMore: matching.length > before.length,
             hasEarlier: read.hasEarlier || before.length > page.length,
           };
         }
@@ -4858,7 +4876,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       )`;
     };
 
-    const selectShellThreadRows = bindSelectShellThreadRows({
+    const selectShellThreadRows: (
+      threadId?: ThreadId,
+      options?: ShellSnapshotOptions & {
+        readonly listedOnly?: boolean;
+        readonly includeDeleted?: boolean;
+      },
+    ) => Effect.Effect<ReadonlyArray<ShellThreadRow>> = bindSelectShellThreadRows({
       get sql() {
         return sql;
       },
@@ -5381,13 +5405,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         threads: shells.filter((thread) => thread.archivedAt === null),
         archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
       };
-    }, Effect.mapError(shellSnapshotReadError));
+    }, Effect.mapError(shellSnapshotReadError)) as (
+      input: Effect.Success<ReturnType<typeof readShellSnapshotRows>>,
+    ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreReadError>;
 
-    const readShellSnapshot: ProjectionStoreV2Shape["readShellSnapshot"] = (options) =>
+    const readShellSnapshot = ((options) =>
       readShellSnapshotRows(options).pipe(
         Effect.mapError(shellSnapshotReadError),
         Effect.map(decodeShellSnapshot),
-      );
+      )) as ProjectionStoreV2Shape["readShellSnapshot"];
 
     const getPullRequestSnapshot: ProjectionStoreV2Shape["getPullRequestSnapshot"] = Effect.fn(
       "ProjectionStore.getPullRequestSnapshot",
@@ -5668,7 +5694,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       };
     }, Effect.mapError(shellSnapshotReadError));
 
-    const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
+    const getThreadShell = ((threadId) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -5750,7 +5776,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             });
           }),
         )
-        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
+        .pipe(
+          Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
+        )) as ProjectionStoreV2Shape["getThreadShell"];
 
     const readOnReader =
       <Args extends ReadonlyArray<unknown>, A, E, R>(
