@@ -5,12 +5,11 @@
 // its scope as `ctx` and this module returns the original Effect.fn.
 import type {
   OrchestrationV2ThreadLinkMetadata,
-  GuestShareId,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
-  ProjectId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
+import type { GuestShareId, ProjectId } from "@t3tools/contracts/baseSchemas";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -18,7 +17,7 @@ import {
   runRanAfter,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadIssueKeysEqual } from "@t3tools/contracts";
+import { threadIssueKeysEqual } from "@t3tools/contracts/issue";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import {
@@ -29,24 +28,15 @@ import {
 } from "../sourceControl/threadPullRequests.ts";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
-  type ChatAttachment,
-  CommandId,
-  type GuestMessageId,
   isCompactionCommandMessage,
   isDeliveredProviderTurn,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
-  MessageId,
-  type NodeId,
-  type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
   type OrchestrationV2ServerCommand,
-  type ThreadPullRequestLink,
-  type ThreadPullRequestWatch,
-  type PullRequestWatchUntil,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
   type OrchestrationV2ContextSourcePoint,
@@ -74,21 +64,40 @@ import {
   repositoryRewindCheckpoint,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
-  ProviderInstanceId,
+} from "@t3tools/contracts/orchestrationV2";
+import {
+  type ChatAttachment,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  ProviderInteractionMode,
-  isRuntimeModeAbove,
-  resolveProviderInstanceEnabled,
-  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts/chatAttachment";
+import {
+  CommandId,
+  type GuestMessageId,
+  MessageId,
+  type NodeId,
   type ProviderSessionId,
   RunId,
-  RuntimeMode,
-  ThreadLinkedPullRequest,
   ThreadId,
   TurnItemId,
   TrimmedNonEmptyString,
-  managedRuntimeModeCeilingMessage,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import { type ModelSelection } from "@t3tools/contracts/modelSelection";
+import {
+  type ThreadPullRequestLink,
+  type ThreadPullRequestWatch,
+  type PullRequestWatchUntil,
+  ThreadLinkedPullRequest,
+} from "@t3tools/contracts/threadPullRequest";
+import { ProviderInstanceId } from "@t3tools/contracts/providerInstance";
+import {
+  ProviderInteractionMode,
+  isRuntimeModeAbove,
+  RuntimeMode,
+} from "@t3tools/contracts/providerPolicy";
+import {
+  resolveProviderInstanceEnabled,
+  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts/settings";
+import { managedRuntimeModeCeilingMessage } from "@t3tools/contracts/managedPolicy";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";

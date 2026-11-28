@@ -1,11 +1,10 @@
 import type {
   OrchestrationV2ThreadLinkMetadata,
-  GuestShareId,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
-  ProjectId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
+import type { GuestShareId, ProjectId } from "@t3tools/contracts/baseSchemas";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -13,7 +12,7 @@ import {
   runRanAfter,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadIssueKeysEqual } from "@t3tools/contracts";
+import { threadIssueKeysEqual } from "@t3tools/contracts/issue";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import {
@@ -24,24 +23,15 @@ import {
 } from "../sourceControl/threadPullRequests.ts";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
-  type ChatAttachment,
-  CommandId,
-  type GuestMessageId,
   isCompactionCommandMessage,
   isDeliveredProviderTurn,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
-  MessageId,
-  type NodeId,
-  type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
   type OrchestrationV2ServerCommand,
-  type ThreadPullRequestLink,
-  type ThreadPullRequestWatch,
-  type PullRequestWatchUntil,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
   type OrchestrationV2ContextSourcePoint,
@@ -69,20 +59,39 @@ import {
   repositoryRewindCheckpoint,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
-  ProviderInstanceId,
+} from "@t3tools/contracts/orchestrationV2";
+import {
+  type ChatAttachment,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  ProviderInteractionMode,
-  isRuntimeModeAbove,
-  resolveProviderInstanceEnabled,
-  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts/chatAttachment";
+import {
+  CommandId,
+  type GuestMessageId,
+  MessageId,
+  type NodeId,
   type ProviderSessionId,
   RunId,
-  RuntimeMode,
-  ThreadLinkedPullRequest,
   ThreadId,
   TurnItemId,
-  managedRuntimeModeCeilingMessage,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import { type ModelSelection } from "@t3tools/contracts/modelSelection";
+import {
+  type ThreadPullRequestLink,
+  type ThreadPullRequestWatch,
+  type PullRequestWatchUntil,
+  ThreadLinkedPullRequest,
+} from "@t3tools/contracts/threadPullRequest";
+import { ProviderInstanceId } from "@t3tools/contracts/providerInstance";
+import {
+  ProviderInteractionMode,
+  isRuntimeModeAbove,
+  RuntimeMode,
+} from "@t3tools/contracts/providerPolicy";
+import {
+  resolveProviderInstanceEnabled,
+  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts/settings";
+import { managedRuntimeModeCeilingMessage } from "@t3tools/contracts/managedPolicy";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
@@ -208,7 +217,7 @@ import { makeInterruptResultTurnItem } from "./runInterruptResult.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
-import { RuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { isRuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -279,6 +288,7 @@ import {
   bindStopRunForQueuedCommand,
   bindDispatchWithReceipt,
 } from "./orchestratorSplits.ts";
+import { yieldNativeSplit } from "./scriptcBindScope.ts";
 
 const isMessageQuestionAnswer = (answer: unknown): boolean => {
   if (typeof answer === "string") return answer.trim().length > 0;
@@ -402,13 +412,37 @@ function runtimePolicyCeilingCause(error: unknown) {
     if (tag !== "OrchestratorDispatchError") break;
     current = Reflect.get(current, "cause");
   }
-  if (typeof current === "object" && current !== null) {
-    const tag = Reflect.get(current, "_tag");
-    if (tag === "RuntimePolicyAboveCeilingError") {
-      return current as RuntimePolicyAboveCeilingError;
-    }
+  if (
+    !isRuntimePolicyAboveCeilingError(current) ||
+    typeof current !== "object" ||
+    current === null
+  ) {
+    return undefined;
   }
-  return undefined;
+  const threadId = Reflect.get(current, "threadId");
+  const runtimeMode = Reflect.get(current, "runtimeMode");
+  const maxRuntimeMode = Reflect.get(current, "maxRuntimeMode");
+  const organization = Reflect.get(current, "organization");
+  if (
+    typeof threadId !== "string" ||
+    typeof organization !== "string" ||
+    (runtimeMode !== "approval-required" &&
+      runtimeMode !== "auto-accept-edits" &&
+      runtimeMode !== "auto" &&
+      runtimeMode !== "full-access") ||
+    (maxRuntimeMode !== "approval-required" &&
+      maxRuntimeMode !== "auto-accept-edits" &&
+      maxRuntimeMode !== "auto" &&
+      maxRuntimeMode !== "full-access")
+  ) {
+    return undefined;
+  }
+  return {
+    threadId: ThreadId.make(threadId),
+    runtimeMode,
+    maxRuntimeMode,
+    organization,
+  };
 }
 
 export class OrchestratorRuntimeModeAboveCeilingError extends Schema.TaggedError<OrchestratorRuntimeModeAboveCeilingError>()(
@@ -1868,10 +1902,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandId: command.commandId,
         }),
       );
-      return {
-        ...event,
-        id: eventId,
-      } as Event;
+      const allocated: any = Object.assign({}, event, { id: eventId });
+      return allocated;
     });
 
   const emit =
@@ -2083,10 +2115,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const eventId = yield* idAllocator.allocate.event({
         threadId: event.threadId,
       });
-      return {
-        ...event,
-        id: eventId,
-      } as Event;
+      const allocated: any = Object.assign({}, event, { id: eventId });
+      return allocated;
     });
 
   const writeSystemEvents =
@@ -2291,26 +2321,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly messageId: OrchestrationV2ConversationMessage["id"];
     readonly now: DateTime.Utc;
   }) {
-    return yield* bindAcceptDelegatedCompletionDelivery({
-      get emit() {
-        return emit;
-      },
-      get hasLiveRun() {
-        return hasLiveRun;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get isTerminalDelegatedTaskStatus() {
-        return isTerminalDelegatedTaskStatus;
-      },
-      get mapDelegatedCompletionError() {
-        return mapDelegatedCompletionError;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindAcceptDelegatedCompletionDelivery({
+        get emit() {
+          return emit;
+        },
+        get hasLiveRun() {
+          return hasLiveRun;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get isTerminalDelegatedTaskStatus() {
+          return isTerminalDelegatedTaskStatus;
+        },
+        get mapDelegatedCompletionError() {
+          return mapDelegatedCompletionError;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+      })(input),
+    );
   });
 
   const emitQueuedRunCancellation = Effect.fn("Orchestrator.emitQueuedRunCancellation")(
@@ -2333,23 +2365,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     cause: unknown,
     queuedRunId?: RunId,
   ) {
-    return yield* bindFailQueuedRunStart({
-      get idAllocator() {
-        return idAllocator;
-      },
-      get nextQueuedRun() {
-        return nextQueuedRun;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get writeSystemEvents() {
-        return writeSystemEvents;
-      },
-    })(threadId, cause, queuedRunId) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindFailQueuedRunStart({
+        get idAllocator() {
+          return idAllocator;
+        },
+        get nextQueuedRun() {
+          return nextQueuedRun;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get writeSystemEvents() {
+          return writeSystemEvents;
+        },
+      })(threadId, cause, queuedRunId),
+    );
   });
 
   const isStaleQuestionWake = Effect.fn("Orchestrator.isStaleQuestionWake")(function* (
@@ -2443,137 +2477,139 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly userStarted?: boolean;
       },
     ) {
-      return yield* bindStartNextQueuedRunOnce({
-        get FRESH_CONTEXT_DETACH_REASON() {
-          return FRESH_CONTEXT_DETACH_REASON;
-        },
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get appendContextHandoffId() {
-          return appendContextHandoffId;
-        },
-        get cancelStaleQuestionWakes() {
-          return cancelStaleQuestionWakes;
-        },
-        get checkpointService() {
-          return checkpointService;
-        },
-        get commandPolicy() {
-          return commandPolicy;
-        },
-        get contextHandoffService() {
-          return contextHandoffService;
-        },
-        get contextSourcePointForRun() {
-          return contextSourcePointForRun;
-        },
-        get currentPullRequestWatchWake() {
-          return currentPullRequestWatchWake;
-        },
-        get dispatchProviderThread() {
-          return dispatchProviderThread;
-        },
-        get ensureGoalCommandSupported() {
-          return ensureGoalCommandSupported;
-        },
-        get failQueuedRunStart() {
-          return failQueuedRunStart;
-        },
-        get followsCurrentConversation() {
-          return followsCurrentConversation;
-        },
-        get forkTransferSupersededEvent() {
-          return forkTransferSupersededEvent;
-        },
-        get idAllocator() {
-          return idAllocator;
-        },
-        get isHandoffSourceRun() {
-          return isHandoffSourceRun;
-        },
-        get isStalePullRequestWatchWake() {
-          return isStalePullRequestWatchWake;
-        },
-        get lastDeliveredRunForProviderThread() {
-          return lastDeliveredRunForProviderThread;
-        },
-        get nextQueuedRun() {
-          return nextQueuedRun;
-        },
-        get nextRunOrdinal() {
-          return nextRunOrdinal;
-        },
-        get notificationTasks() {
-          return notificationTasks;
-        },
-        get pendingForkTransferForThread() {
-          return pendingForkTransferForThread;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get providerAdapters() {
-          return providerAdapters;
-        },
-        get providerSessionIdFor() {
-          return providerSessionIdFor;
-        },
-        get providerSwitchService() {
-          return providerSwitchService;
-        },
-        get providerThreadPredatesBoundary() {
-          return providerThreadPredatesBoundary;
-        },
-        get queuedRunCancellationEvents() {
-          return queuedRunCancellationEvents;
-        },
-        get queuedRunModelSelection() {
-          return queuedRunModelSelection;
-        },
-        get readCommandProjection() {
-          return readCommandProjection;
-        },
-        get readHandoffItems() {
-          return readHandoffItems;
-        },
-        get readInheritedItems() {
-          return readInheritedItems;
-        },
-        get rootProviderThreadsForProvider() {
-          return rootProviderThreadsForProvider;
-        },
-        get runtimeModeCeiling() {
-          return runtimeModeCeiling;
-        },
-        get runtimePolicy() {
-          return runtimePolicy;
-        },
-        get serverSettings() {
-          return serverSettings;
-        },
-        get sessionHasBackgroundWork() {
-          return sessionHasBackgroundWork;
-        },
-        get sessionsReleasedByFreshContext() {
-          return sessionsReleasedByFreshContext;
-        },
-        get uniqueSessions() {
-          return uniqueSessions;
-        },
-        get usageLimitHoldsQueue() {
-          return usageLimitHoldsQueue;
-        },
-        get wakeWorkStartedAt() {
-          return wakeWorkStartedAt;
-        },
-        get writeSystemEvents() {
-          return writeSystemEvents;
-        },
-      })(threadId, options) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindStartNextQueuedRunOnce({
+          get FRESH_CONTEXT_DETACH_REASON() {
+            return FRESH_CONTEXT_DETACH_REASON;
+          },
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get appendContextHandoffId() {
+            return appendContextHandoffId;
+          },
+          get cancelStaleQuestionWakes() {
+            return cancelStaleQuestionWakes;
+          },
+          get checkpointService() {
+            return checkpointService;
+          },
+          get commandPolicy() {
+            return commandPolicy;
+          },
+          get contextHandoffService() {
+            return contextHandoffService;
+          },
+          get contextSourcePointForRun() {
+            return contextSourcePointForRun;
+          },
+          get currentPullRequestWatchWake() {
+            return currentPullRequestWatchWake;
+          },
+          get dispatchProviderThread() {
+            return dispatchProviderThread;
+          },
+          get ensureGoalCommandSupported() {
+            return ensureGoalCommandSupported;
+          },
+          get failQueuedRunStart() {
+            return failQueuedRunStart;
+          },
+          get followsCurrentConversation() {
+            return followsCurrentConversation;
+          },
+          get forkTransferSupersededEvent() {
+            return forkTransferSupersededEvent;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get isHandoffSourceRun() {
+            return isHandoffSourceRun;
+          },
+          get isStalePullRequestWatchWake() {
+            return isStalePullRequestWatchWake;
+          },
+          get lastDeliveredRunForProviderThread() {
+            return lastDeliveredRunForProviderThread;
+          },
+          get nextQueuedRun() {
+            return nextQueuedRun;
+          },
+          get nextRunOrdinal() {
+            return nextRunOrdinal;
+          },
+          get notificationTasks() {
+            return notificationTasks;
+          },
+          get pendingForkTransferForThread() {
+            return pendingForkTransferForThread;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerAdapters() {
+            return providerAdapters;
+          },
+          get providerSessionIdFor() {
+            return providerSessionIdFor;
+          },
+          get providerSwitchService() {
+            return providerSwitchService;
+          },
+          get providerThreadPredatesBoundary() {
+            return providerThreadPredatesBoundary;
+          },
+          get queuedRunCancellationEvents() {
+            return queuedRunCancellationEvents;
+          },
+          get queuedRunModelSelection() {
+            return queuedRunModelSelection;
+          },
+          get readCommandProjection() {
+            return readCommandProjection;
+          },
+          get readHandoffItems() {
+            return readHandoffItems;
+          },
+          get readInheritedItems() {
+            return readInheritedItems;
+          },
+          get rootProviderThreadsForProvider() {
+            return rootProviderThreadsForProvider;
+          },
+          get runtimeModeCeiling() {
+            return runtimeModeCeiling;
+          },
+          get runtimePolicy() {
+            return runtimePolicy;
+          },
+          get serverSettings() {
+            return serverSettings;
+          },
+          get sessionHasBackgroundWork() {
+            return sessionHasBackgroundWork;
+          },
+          get sessionsReleasedByFreshContext() {
+            return sessionsReleasedByFreshContext;
+          },
+          get uniqueSessions() {
+            return uniqueSessions;
+          },
+          get usageLimitHoldsQueue() {
+            return usageLimitHoldsQueue;
+          },
+          get wakeWorkStartedAt() {
+            return wakeWorkStartedAt;
+          },
+          get writeSystemEvents() {
+            return writeSystemEvents;
+          },
+        })(threadId, options),
+      );
     },
     (effect, threadId, options) =>
       effect.pipe(
@@ -2707,26 +2743,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     threadId: ThreadId,
     runIds?: ReadonlyArray<RunId>,
   ) {
-    return yield* bindRequeueUnreadSteers({
-      get awaitsCheckpointCapture() {
-        return awaitsCheckpointCapture;
-      },
-      get dispatchWithReceiptEffect() {
-        return dispatchWithReceiptEffect;
-      },
-      get effectOutbox() {
-        return effectOutbox;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get writeSystemEvents() {
-        return writeSystemEvents;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(threadId, runIds) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindRequeueUnreadSteers({
+        get awaitsCheckpointCapture() {
+          return awaitsCheckpointCapture;
+        },
+        get dispatchWithReceiptEffect() {
+          return dispatchWithReceiptEffect;
+        },
+        get effectOutbox() {
+          return effectOutbox;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get writeSystemEvents() {
+          return writeSystemEvents;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+      })(threadId, runIds),
+    );
   });
 
   const resumeQueuedRuns = Effect.gen(function* () {
@@ -2774,47 +2812,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchDelegatedTaskCompletionDeliveryResolution({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get completionDeliveryMessage() {
-        return completionDeliveryMessage;
-      },
-      get completionDeliveryRun() {
-        return completionDeliveryRun;
-      },
-      get delegatedCompletionPlanEvents() {
-        return delegatedCompletionPlanEvents;
-      },
-      get delegatedCompletionWakeDetail() {
-        return delegatedCompletionWakeDetail;
-      },
-      get emit() {
-        return emit;
-      },
-      get emitQueuedRunCancellation() {
-        return emitQueuedRunCancellation;
-      },
-      get isLiveRun() {
-        return isLiveRun;
-      },
-      get isTerminalDelegatedTaskStatus() {
-        return isTerminalDelegatedTaskStatus;
-      },
-      get isUnobservedAcknowledgement() {
-        return isUnobservedAcknowledgement;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get planDelegatedCompletionDelivery() {
-        return planDelegatedCompletionDelivery;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchDelegatedTaskCompletionDeliveryResolution({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get completionDeliveryMessage() {
+          return completionDeliveryMessage;
+        },
+        get completionDeliveryRun() {
+          return completionDeliveryRun;
+        },
+        get delegatedCompletionPlanEvents() {
+          return delegatedCompletionPlanEvents;
+        },
+        get delegatedCompletionWakeDetail() {
+          return delegatedCompletionWakeDetail;
+        },
+        get emit() {
+          return emit;
+        },
+        get emitQueuedRunCancellation() {
+          return emitQueuedRunCancellation;
+        },
+        get isLiveRun() {
+          return isLiveRun;
+        },
+        get isTerminalDelegatedTaskStatus() {
+          return isTerminalDelegatedTaskStatus;
+        },
+        get isUnobservedAcknowledgement() {
+          return isUnobservedAcknowledgement;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get planDelegatedCompletionDelivery() {
+          return planDelegatedCompletionDelivery;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+      })(command, events),
+    );
   });
 
   const disposeDelegatedCompletionCohort = Effect.fn(
@@ -2834,17 +2874,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // open, and its delivery stays the wake's, so the wake's terminal reserves any sibling's result.
     readonly interruptedWakeTaskIds?: ReadonlyArray<NodeId>;
   }) {
-    return yield* bindDisposeDelegatedCompletionCohort({
-      get completionDeliveryRun() {
-        return completionDeliveryRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get emitQueuedRunCancellation() {
-        return emitQueuedRunCancellation;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDisposeDelegatedCompletionCohort({
+        get completionDeliveryRun() {
+          return completionDeliveryRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get emitQueuedRunCancellation() {
+          return emitQueuedRunCancellation;
+        },
+      })(input),
+    );
   });
 
   const disposeAllDelegatedCompletionCohorts = (input: {
@@ -2881,20 +2923,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchThreadCreate({
-      get OrchestratorThreadAlreadyExistsError() {
-        return OrchestratorThreadAlreadyExistsError;
-      },
-      get emit() {
-        return emit;
-      },
-      get findThread() {
-        return findThread;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchThreadCreate({
+        get OrchestratorThreadAlreadyExistsError() {
+          return OrchestratorThreadAlreadyExistsError;
+        },
+        get emit() {
+          return emit;
+        },
+        get findThread() {
+          return findThread;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+      })(command, events),
+    );
   });
 
   const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
@@ -2963,26 +3007,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchPullRequestWatchSync({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get dispatchMessage() {
-          return dispatchMessage;
-        },
-        get dispatchThreadMutation() {
-          return dispatchThreadMutation;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get pullRequestSnapshotEndsWatch() {
-          return pullRequestSnapshotEndsWatch;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchPullRequestWatchSync({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get dispatchMessage() {
+            return dispatchMessage;
+          },
+          get dispatchThreadMutation() {
+            return dispatchThreadMutation;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get pullRequestSnapshotEndsWatch() {
+            return pullRequestSnapshotEndsWatch;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -3118,104 +3164,106 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchThreadMutation({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get OrchestratorProviderAdapterError() {
-        return OrchestratorProviderAdapterError;
-      },
-      get OrchestratorProviderSelectionBusyError() {
-        return OrchestratorProviderSelectionBusyError;
-      },
-      get OrchestratorSubagentThreadReadOnlyError() {
-        return OrchestratorSubagentThreadReadOnlyError;
-      },
-      get WORKSPACE_PREPARATION_INPUT() {
-        return WORKSPACE_PREPARATION_INPUT;
-      },
-      get closePendingLinkRequests() {
-        return closePendingLinkRequests;
-      },
-      get dispatchQueuedRunCancel() {
-        return dispatchQueuedRunCancel;
-      },
-      get dispatchRuntimeRequestRespond() {
-        return dispatchRuntimeRequestRespond;
-      },
-      get disposeAllDelegatedCompletionCohorts() {
-        return disposeAllDelegatedCompletionCohorts;
-      },
-      get emit() {
-        return emit;
-      },
-      get eventSink() {
-        return eventSink;
-      },
-      get getProjectionWithPendingEvents() {
-        return getProjectionWithPendingEvents;
-      },
-      get hasRunningDelegatedTasks() {
-        return hasRunningDelegatedTasks;
-      },
-      get legacyPullRequestLink() {
-        return legacyPullRequestLink;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get pendingThreadTitleGenerationEffect() {
-        return pendingThreadTitleGenerationEffect;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get projects() {
-        return projects;
-      },
-      get providerAdapters() {
-        return providerAdapters;
-      },
-      get providerSessions() {
-        return providerSessions;
-      },
-      get providerSwitchService() {
-        return providerSwitchService;
-      },
-      get releaseGuestAttachments() {
-        return releaseGuestAttachments;
-      },
-      get sessionHasBackgroundWork() {
-        return sessionHasBackgroundWork;
-      },
-      get stopReachedRun() {
-        return stopReachedRun;
-      },
-      get syncedPullRequestWatch() {
-        return syncedPullRequestWatch;
-      },
-      get threadPullRequestLinksEqual() {
-        return threadPullRequestLinksEqual;
-      },
-      get usageLimitHoldsQueue() {
-        return usageLimitHoldsQueue;
-      },
-      get withPullRequestWatch() {
-        return withPullRequestWatch;
-      },
-      get withUntil() {
-        return withUntil;
-      },
-      get withoutChecksAnswer() {
-        return withoutChecksAnswer;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchThreadMutation({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get OrchestratorProviderAdapterError() {
+          return OrchestratorProviderAdapterError;
+        },
+        get OrchestratorProviderSelectionBusyError() {
+          return OrchestratorProviderSelectionBusyError;
+        },
+        get OrchestratorSubagentThreadReadOnlyError() {
+          return OrchestratorSubagentThreadReadOnlyError;
+        },
+        get WORKSPACE_PREPARATION_INPUT() {
+          return WORKSPACE_PREPARATION_INPUT;
+        },
+        get closePendingLinkRequests() {
+          return closePendingLinkRequests;
+        },
+        get dispatchQueuedRunCancel() {
+          return dispatchQueuedRunCancel;
+        },
+        get dispatchRuntimeRequestRespond() {
+          return dispatchRuntimeRequestRespond;
+        },
+        get disposeAllDelegatedCompletionCohorts() {
+          return disposeAllDelegatedCompletionCohorts;
+        },
+        get emit() {
+          return emit;
+        },
+        get eventSink() {
+          return eventSink;
+        },
+        get getProjectionWithPendingEvents() {
+          return getProjectionWithPendingEvents;
+        },
+        get hasRunningDelegatedTasks() {
+          return hasRunningDelegatedTasks;
+        },
+        get legacyPullRequestLink() {
+          return legacyPullRequestLink;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get pendingThreadTitleGenerationEffect() {
+          return pendingThreadTitleGenerationEffect;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get projects() {
+          return projects;
+        },
+        get providerAdapters() {
+          return providerAdapters;
+        },
+        get providerSessions() {
+          return providerSessions;
+        },
+        get providerSwitchService() {
+          return providerSwitchService;
+        },
+        get releaseGuestAttachments() {
+          return releaseGuestAttachments;
+        },
+        get sessionHasBackgroundWork() {
+          return sessionHasBackgroundWork;
+        },
+        get stopReachedRun() {
+          return stopReachedRun;
+        },
+        get syncedPullRequestWatch() {
+          return syncedPullRequestWatch;
+        },
+        get threadPullRequestLinksEqual() {
+          return threadPullRequestLinksEqual;
+        },
+        get usageLimitHoldsQueue() {
+          return usageLimitHoldsQueue;
+        },
+        get withPullRequestWatch() {
+          return withPullRequestWatch;
+        },
+        get withUntil() {
+          return withUntil;
+        },
+        get withoutChecksAnswer() {
+          return withoutChecksAnswer;
+        },
+      })(command, events, effects),
+    );
   });
 
   const dispatchProviderSessionDetach = Effect.fn("orchestrationV2.dispatch.providerSessionDetach")(
@@ -3402,91 +3450,95 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "thread.fork" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchThreadFork({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get OrchestratorThreadAlreadyExistsError() {
-        return OrchestratorThreadAlreadyExistsError;
-      },
-      get contextSourcePointForRun() {
-        return contextSourcePointForRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get findThread() {
-        return findThread;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get providerThreadForRun() {
-        return providerThreadForRun;
-      },
-      get providerTurnForRun() {
-        return providerTurnForRun;
-      },
-      get refuseAboveDispatchModeLimit() {
-        return refuseAboveDispatchModeLimit;
-      },
-      get runForSourcePoint() {
-        return runForSourcePoint;
-      },
-      get worktreeSetupTracker() {
-        return worktreeSetupTracker;
-      },
-      get threadForkService() {
-        return threadForkService;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchThreadFork({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get OrchestratorThreadAlreadyExistsError() {
+          return OrchestratorThreadAlreadyExistsError;
+        },
+        get contextSourcePointForRun() {
+          return contextSourcePointForRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get findThread() {
+          return findThread;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get providerThreadForRun() {
+          return providerThreadForRun;
+        },
+        get providerTurnForRun() {
+          return providerTurnForRun;
+        },
+        get refuseAboveDispatchModeLimit() {
+          return refuseAboveDispatchModeLimit;
+        },
+        get runForSourcePoint() {
+          return runForSourcePoint;
+        },
+        get worktreeSetupTracker() {
+          return worktreeSetupTracker;
+        },
+        get threadForkService() {
+          return threadForkService;
+        },
+      })(command, events),
+    );
   });
 
   const dispatchThreadMergeBack = Effect.fn("orchestrationV2.dispatch.threadMergeBack")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.merge_back" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchThreadMergeBack({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get contextSourcePointForRun() {
-        return contextSourcePointForRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get providerThreadForRun() {
-        return providerThreadForRun;
-      },
-      get refuseAboveDispatchModeLimit() {
-        return refuseAboveDispatchModeLimit;
-      },
-      get runForSourcePoint() {
-        return runForSourcePoint;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchThreadMergeBack({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get contextSourcePointForRun() {
+          return contextSourcePointForRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get providerThreadForRun() {
+          return providerThreadForRun;
+        },
+        get refuseAboveDispatchModeLimit() {
+          return refuseAboveDispatchModeLimit;
+        },
+        get runForSourcePoint() {
+          return runForSourcePoint;
+        },
+      })(command, events),
+    );
   });
 
   const ensureSteeringMessage = Effect.fn("Orchestrator.ensureSteeringMessage")(function* (
@@ -3561,77 +3613,79 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly notification?: OrchestrationV2ConversationMessage["notification"];
     readonly forceRestart: boolean;
   }) {
-    return yield* bindDispatchSteerIntoRun({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProviderAdapterError() {
-        return OrchestratorProviderAdapterError;
-      },
-      get acceptDelegatedCompletionDelivery() {
-        return acceptDelegatedCompletionDelivery;
-      },
-      get checkpointService() {
-        return checkpointService;
-      },
-      get commandPolicy() {
-        return commandPolicy;
-      },
-      get contextHandoffService() {
-        return contextHandoffService;
-      },
-      get contextSourcePointForRun() {
-        return contextSourcePointForRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get ensureSteeringMessage() {
-        return ensureSteeringMessage;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get notificationTasks() {
-        return notificationTasks;
-      },
-      get providerAdapters() {
-        return providerAdapters;
-      },
-      get providerSessionIdFor() {
-        return providerSessionIdFor;
-      },
-      get providerSessions() {
-        return providerSessions;
-      },
-      get providerSwitchService() {
-        return providerSwitchService;
-      },
-      get readHandoffItems() {
-        return readHandoffItems;
-      },
-      get refuseAboveDispatchModeLimit() {
-        return refuseAboveDispatchModeLimit;
-      },
-      get rootProviderThreadsForProvider() {
-        return rootProviderThreadsForProvider;
-      },
-      get runtimePolicy() {
-        return runtimePolicy;
-      },
-      get stopReachedRun() {
-        return stopReachedRun;
-      },
-      get turnStartedModes() {
-        return turnStartedModes;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchSteerIntoRun({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProviderAdapterError() {
+          return OrchestratorProviderAdapterError;
+        },
+        get acceptDelegatedCompletionDelivery() {
+          return acceptDelegatedCompletionDelivery;
+        },
+        get checkpointService() {
+          return checkpointService;
+        },
+        get commandPolicy() {
+          return commandPolicy;
+        },
+        get contextHandoffService() {
+          return contextHandoffService;
+        },
+        get contextSourcePointForRun() {
+          return contextSourcePointForRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get ensureSteeringMessage() {
+          return ensureSteeringMessage;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get notificationTasks() {
+          return notificationTasks;
+        },
+        get providerAdapters() {
+          return providerAdapters;
+        },
+        get providerSessionIdFor() {
+          return providerSessionIdFor;
+        },
+        get providerSessions() {
+          return providerSessions;
+        },
+        get providerSwitchService() {
+          return providerSwitchService;
+        },
+        get readHandoffItems() {
+          return readHandoffItems;
+        },
+        get refuseAboveDispatchModeLimit() {
+          return refuseAboveDispatchModeLimit;
+        },
+        get rootProviderThreadsForProvider() {
+          return rootProviderThreadsForProvider;
+        },
+        get runtimePolicy() {
+          return runtimePolicy;
+        },
+        get stopReachedRun() {
+          return stopReachedRun;
+        },
+        get turnStartedModes() {
+          return turnStartedModes;
+        },
+      })(input),
+    );
   });
 
   // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
@@ -3659,170 +3713,172 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchMessage({
-      get FRESH_CONTEXT_DETACH_REASON() {
-        return FRESH_CONTEXT_DETACH_REASON;
-      },
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get OrchestratorProviderAdapterError() {
-        return OrchestratorProviderAdapterError;
-      },
-      get WORKSPACE_PREPARATION_INPUT() {
-        return WORKSPACE_PREPARATION_INPUT;
-      },
-      get appendContextHandoffId() {
-        return appendContextHandoffId;
-      },
-      get checkpointService() {
-        return checkpointService;
-      },
-      get commandPolicy() {
-        return commandPolicy;
-      },
-      get contextHandoffService() {
-        return contextHandoffService;
-      },
-      get contextSourcePointForRun() {
-        return contextSourcePointForRun;
-      },
-      get delegatedCompletionWakeDetail() {
-        return delegatedCompletionWakeDetail;
-      },
-      get dispatchProviderThread() {
-        return dispatchProviderThread;
-      },
-      get dispatchSteerIntoRun() {
-        return dispatchSteerIntoRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get ensureGoalCommandSupported() {
-        return ensureGoalCommandSupported;
-      },
-      get ensureSteeringMessage() {
-        return ensureSteeringMessage;
-      },
-      get followsCurrentConversation() {
-        return followsCurrentConversation;
-      },
-      get forkTransferSupersededEvent() {
-        return forkTransferSupersededEvent;
-      },
-      get getProjectionWithPendingEvents() {
-        return getProjectionWithPendingEvents;
-      },
-      get goalDriverFor() {
-        return goalDriverFor;
-      },
-      get hasTitleSetBeforeFirstMessage() {
-        return hasTitleSetBeforeFirstMessage;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get isHandoffSourceRun() {
-        return isHandoffSourceRun;
-      },
-      get isLiveRun() {
-        return isLiveRun;
-      },
-      get isStaleQuestionWake() {
-        return isStaleQuestionWake;
-      },
-      get lastDeliveredRunForProviderThread() {
-        return lastDeliveredRunForProviderThread;
-      },
-      get latestContextTransfer() {
-        return latestContextTransfer;
-      },
-      get limitForbidsParkedSteer() {
-        return limitForbidsParkedSteer;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get nextRunOrdinal() {
-        return nextRunOrdinal;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get notificationTasks() {
-        return notificationTasks;
-      },
-      get pendingForkTransferForThread() {
-        return pendingForkTransferForThread;
-      },
-      get pendingMergeBackTransfersForThread() {
-        return pendingMergeBackTransfersForThread;
-      },
-      get pendingThreadTitleGenerationEffect() {
-        return pendingThreadTitleGenerationEffect;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get providerAdapters() {
-        return providerAdapters;
-      },
-      get providerSessionIdFor() {
-        return providerSessionIdFor;
-      },
-      get providerSessions() {
-        return providerSessions;
-      },
-      get providerSwitchService() {
-        return providerSwitchService;
-      },
-      get providerThreadForRun() {
-        return providerThreadForRun;
-      },
-      get queueTailModelSelection() {
-        return queueTailModelSelection;
-      },
-      get readHandoffItems() {
-        return readHandoffItems;
-      },
-      get readInheritedItems() {
-        return readInheritedItems;
-      },
-      get rootProviderThreadsForProvider() {
-        return rootProviderThreadsForProvider;
-      },
-      get runtimePolicy() {
-        return runtimePolicy;
-      },
-      get sessionHasBackgroundWork() {
-        return sessionHasBackgroundWork;
-      },
-      get sessionsReleasedByFreshContext() {
-        return sessionsReleasedByFreshContext;
-      },
-      get shouldPrepareLegacyImportHandoff() {
-        return shouldPrepareLegacyImportHandoff;
-      },
-      get stopReachedRun() {
-        return stopReachedRun;
-      },
-      get stopRunForQueuedCommand() {
-        return stopRunForQueuedCommand;
-      },
-      get uniqueSessions() {
-        return uniqueSessions;
-      },
-      get wakeWorkStartedAt() {
-        return wakeWorkStartedAt;
-      },
-      get worktreeSetupPending() {
-        return worktreeSetupPending;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchMessage({
+        get FRESH_CONTEXT_DETACH_REASON() {
+          return FRESH_CONTEXT_DETACH_REASON;
+        },
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get OrchestratorProviderAdapterError() {
+          return OrchestratorProviderAdapterError;
+        },
+        get WORKSPACE_PREPARATION_INPUT() {
+          return WORKSPACE_PREPARATION_INPUT;
+        },
+        get appendContextHandoffId() {
+          return appendContextHandoffId;
+        },
+        get checkpointService() {
+          return checkpointService;
+        },
+        get commandPolicy() {
+          return commandPolicy;
+        },
+        get contextHandoffService() {
+          return contextHandoffService;
+        },
+        get contextSourcePointForRun() {
+          return contextSourcePointForRun;
+        },
+        get delegatedCompletionWakeDetail() {
+          return delegatedCompletionWakeDetail;
+        },
+        get dispatchProviderThread() {
+          return dispatchProviderThread;
+        },
+        get dispatchSteerIntoRun() {
+          return dispatchSteerIntoRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get ensureGoalCommandSupported() {
+          return ensureGoalCommandSupported;
+        },
+        get ensureSteeringMessage() {
+          return ensureSteeringMessage;
+        },
+        get followsCurrentConversation() {
+          return followsCurrentConversation;
+        },
+        get forkTransferSupersededEvent() {
+          return forkTransferSupersededEvent;
+        },
+        get getProjectionWithPendingEvents() {
+          return getProjectionWithPendingEvents;
+        },
+        get goalDriverFor() {
+          return goalDriverFor;
+        },
+        get hasTitleSetBeforeFirstMessage() {
+          return hasTitleSetBeforeFirstMessage;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get isHandoffSourceRun() {
+          return isHandoffSourceRun;
+        },
+        get isLiveRun() {
+          return isLiveRun;
+        },
+        get isStaleQuestionWake() {
+          return isStaleQuestionWake;
+        },
+        get lastDeliveredRunForProviderThread() {
+          return lastDeliveredRunForProviderThread;
+        },
+        get latestContextTransfer() {
+          return latestContextTransfer;
+        },
+        get limitForbidsParkedSteer() {
+          return limitForbidsParkedSteer;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get nextRunOrdinal() {
+          return nextRunOrdinal;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get notificationTasks() {
+          return notificationTasks;
+        },
+        get pendingForkTransferForThread() {
+          return pendingForkTransferForThread;
+        },
+        get pendingMergeBackTransfersForThread() {
+          return pendingMergeBackTransfersForThread;
+        },
+        get pendingThreadTitleGenerationEffect() {
+          return pendingThreadTitleGenerationEffect;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get providerAdapters() {
+          return providerAdapters;
+        },
+        get providerSessionIdFor() {
+          return providerSessionIdFor;
+        },
+        get providerSessions() {
+          return providerSessions;
+        },
+        get providerSwitchService() {
+          return providerSwitchService;
+        },
+        get providerThreadForRun() {
+          return providerThreadForRun;
+        },
+        get queueTailModelSelection() {
+          return queueTailModelSelection;
+        },
+        get readHandoffItems() {
+          return readHandoffItems;
+        },
+        get readInheritedItems() {
+          return readInheritedItems;
+        },
+        get rootProviderThreadsForProvider() {
+          return rootProviderThreadsForProvider;
+        },
+        get runtimePolicy() {
+          return runtimePolicy;
+        },
+        get sessionHasBackgroundWork() {
+          return sessionHasBackgroundWork;
+        },
+        get sessionsReleasedByFreshContext() {
+          return sessionsReleasedByFreshContext;
+        },
+        get shouldPrepareLegacyImportHandoff() {
+          return shouldPrepareLegacyImportHandoff;
+        },
+        get stopReachedRun() {
+          return stopReachedRun;
+        },
+        get stopRunForQueuedCommand() {
+          return stopRunForQueuedCommand;
+        },
+        get uniqueSessions() {
+          return uniqueSessions;
+        },
+        get wakeWorkStartedAt() {
+          return wakeWorkStartedAt;
+        },
+        get worktreeSetupPending() {
+          return worktreeSetupPending;
+        },
+      })(command, events, effects),
+    );
   });
 
   // A native background subagent keeps working, and delegating, after the latest run settles.
@@ -3847,36 +3903,78 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchDelegatedTaskRequest({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get OrchestratorProviderAdapterError() {
-          return OrchestratorProviderAdapterError;
-        },
-        get backgroundSubagentOutlivesRun() {
-          return backgroundSubagentOutlivesRun;
-        },
-        get contextSourcePointForRun() {
-          return contextSourcePointForRun;
-        },
-        get dispatchMessage() {
-          return dispatchMessage;
-        },
+      return yield* yieldNativeSplit(
+        bindDispatchDelegatedTaskRequest({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get OrchestratorProviderAdapterError() {
+            return OrchestratorProviderAdapterError;
+          },
+          get backgroundSubagentOutlivesRun() {
+            return backgroundSubagentOutlivesRun;
+          },
+          get contextSourcePointForRun() {
+            return contextSourcePointForRun;
+          },
+          get dispatchMessage() {
+            return dispatchMessage;
+          },
+          get emit() {
+            return emit;
+          },
+          get getProjectionWithPendingEvents() {
+            return getProjectionWithPendingEvents;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get nextTurnItemOrdinal() {
+            return nextTurnItemOrdinal;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerAdapters() {
+            return providerAdapters;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+          get stopReachedRun() {
+            return stopReachedRun;
+          },
+          get subagentCount() {
+            return subagentCount;
+          },
+        })(command, events, effects),
+      );
+    },
+  );
+
+  const recordSubagentFollowup = Effect.fnUntraced(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    return yield* yieldNativeSplit(
+      bindRecordSubagentFollowup({
         get emit() {
           return emit;
-        },
-        get getProjectionWithPendingEvents() {
-          return getProjectionWithPendingEvents;
         },
         get idAllocator() {
           return idAllocator;
         },
         get mapDispatchError() {
           return mapDispatchError;
+        },
+        get mayStartSubagentFollowup() {
+          return mayStartSubagentFollowup;
         },
         get nextTurnItemOrdinal() {
           return nextTurnItemOrdinal;
@@ -3890,46 +3988,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         get providerTurnForRun() {
           return providerTurnForRun;
         },
-        get stopReachedRun() {
-          return stopReachedRun;
-        },
-        get subagentCount() {
-          return subagentCount;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
-    },
-  );
-
-  const recordSubagentFollowup = Effect.fnUntraced(function* (
-    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    return yield* bindRecordSubagentFollowup({
-      get emit() {
-        return emit;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get mayStartSubagentFollowup() {
-        return mayStartSubagentFollowup;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get providerAdapters() {
-        return providerAdapters;
-      },
-      get providerTurnForRun() {
-        return providerTurnForRun;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+      })(command, events),
+    );
   });
 
   /**
@@ -3946,35 +4006,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchRemoteDelegatedTaskRequest({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get emit() {
-        return emit;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get providerTurnForRun() {
-        return providerTurnForRun;
-      },
-      get stopReachedRun() {
-        return stopReachedRun;
-      },
-      get subagentCount() {
-        return subagentCount;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchRemoteDelegatedTaskRequest({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get emit() {
+          return emit;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get providerTurnForRun() {
+          return providerTurnForRun;
+        },
+        get stopReachedRun() {
+          return stopReachedRun;
+        },
+        get subagentCount() {
+          return subagentCount;
+        },
+      })(command, events),
+    );
   });
 
   /**
@@ -3992,32 +4054,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchRemoteDelegatedTaskComplete({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get delegatedCompletionPlanEvents() {
-        return delegatedCompletionPlanEvents;
-      },
-      get emit() {
-        return emit;
-      },
-      get emitRemoteStopOwed() {
-        return emitRemoteStopOwed;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get planDelegatedCompletionDelivery() {
-        return planDelegatedCompletionDelivery;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchRemoteDelegatedTaskComplete({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get delegatedCompletionPlanEvents() {
+          return delegatedCompletionPlanEvents;
+        },
+        get emit() {
+          return emit;
+        },
+        get emitRemoteStopOwed() {
+          return emitRemoteStopOwed;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get planDelegatedCompletionDelivery() {
+          return planDelegatedCompletionDelivery;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+      })(command, events),
+    );
   });
 
   /**
@@ -4098,37 +4162,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "delegated_task.wake-policy" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchDelegatedTaskWakePolicy({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get emit() {
-        return emit;
-      },
-      get hasLiveRun() {
-        return hasLiveRun;
-      },
-      get isTerminalDelegatedTaskStatus() {
-        return isTerminalDelegatedTaskStatus;
-      },
-      get planDelegatedCompletionDelivery() {
-        return planDelegatedCompletionDelivery;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
-  });
-
-  const dispatchCreatedThreadRecord = Effect.fn("orchestrationV2.dispatch.createdThreadRecord")(
-    function* (
-      command: Extract<OrchestrationV2Command, { readonly type: "thread.created.record" }>,
-      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    ) {
-      return yield* bindDispatchCreatedThreadRecord({
+    return yield* yieldNativeSplit(
+      bindDispatchDelegatedTaskWakePolicy({
         get OrchestratorDispatchError() {
           return OrchestratorDispatchError;
         },
@@ -4138,19 +4173,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         get emit() {
           return emit;
         },
-        get idAllocator() {
-          return idAllocator;
+        get hasLiveRun() {
+          return hasLiveRun;
         },
-        get nextTurnItemOrdinal() {
-          return nextTurnItemOrdinal;
+        get isTerminalDelegatedTaskStatus() {
+          return isTerminalDelegatedTaskStatus;
+        },
+        get planDelegatedCompletionDelivery() {
+          return planDelegatedCompletionDelivery;
         },
         get projectionStore() {
           return projectionStore;
         },
-        get providerTurnForRun() {
-          return providerTurnForRun;
-        },
-      })(command, events) as Effect.Effect<any, never, never>;
+      })(command, events),
+    );
+  });
+
+  const dispatchCreatedThreadRecord = Effect.fn("orchestrationV2.dispatch.createdThreadRecord")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.created.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      return yield* yieldNativeSplit(
+        bindDispatchCreatedThreadRecord({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get emit() {
+            return emit;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get nextTurnItemOrdinal() {
+            return nextTurnItemOrdinal;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+        })(command, events),
+      );
     },
   );
 
@@ -4159,26 +4227,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command: Extract<OrchestrationV2InternalCommand, { readonly type: "secret_request.record" }>,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
-      return yield* bindDispatchSecretRequestRecord({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get emit() {
-          return emit;
-        },
-        get nextTurnItemOrdinal() {
-          return nextTurnItemOrdinal;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get providerTurnForRun() {
-          return providerTurnForRun;
-        },
-      })(command, events) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchSecretRequestRecord({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get emit() {
+            return emit;
+          },
+          get nextTurnItemOrdinal() {
+            return nextTurnItemOrdinal;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+        })(command, events),
+      );
     },
   );
 
@@ -4191,26 +4261,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
-      return yield* bindDispatchFeedbackRequestRecord({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get emit() {
-          return emit;
-        },
-        get nextTurnItemOrdinal() {
-          return nextTurnItemOrdinal;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get providerTurnForRun() {
-          return providerTurnForRun;
-        },
-      })(command, events) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchFeedbackRequestRecord({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get emit() {
+            return emit;
+          },
+          get nextTurnItemOrdinal() {
+            return nextTurnItemOrdinal;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+        })(command, events),
+      );
     },
   );
 
@@ -4224,35 +4296,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchLinkRequestRecord({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get askedForLinkedMachine() {
-          return askedForLinkedMachine;
-        },
-        get dispatchMessage() {
-          return dispatchMessage;
-        },
-        get emit() {
-          return emit;
-        },
-        get nextTurnItemOrdinal() {
-          return nextTurnItemOrdinal;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get providerTurnForRun() {
-          return providerTurnForRun;
-        },
-        get stopReachedRun() {
-          return stopReachedRun;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchLinkRequestRecord({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get askedForLinkedMachine() {
+            return askedForLinkedMachine;
+          },
+          get dispatchMessage() {
+            return dispatchMessage;
+          },
+          get emit() {
+            return emit;
+          },
+          get nextTurnItemOrdinal() {
+            return nextTurnItemOrdinal;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+          get stopReachedRun() {
+            return stopReachedRun;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -4304,50 +4378,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchRuntimeRequestRespond({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get decodeUserInputAnswers() {
-          return decodeUserInputAnswers;
-        },
-        get dispatchMessage() {
-          return dispatchMessage;
-        },
-        get emit() {
-          return emit;
-        },
-        get idAllocator() {
-          return idAllocator;
-        },
-        get isMessageQuestionAnswer() {
-          return isMessageQuestionAnswer;
-        },
-        get mapDispatchError() {
-          return mapDispatchError;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get providerSessions() {
-          return providerSessions;
-        },
-        get recordSubagentFollowup() {
-          return recordSubagentFollowup;
-        },
-        get refuseAboveDispatchModeLimit() {
-          return refuseAboveDispatchModeLimit;
-        },
-        get serverSettings() {
-          return serverSettings;
-        },
-        get turnStartedModes() {
-          return turnStartedModes;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchRuntimeRequestRespond({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get decodeUserInputAnswers() {
+            return decodeUserInputAnswers;
+          },
+          get dispatchMessage() {
+            return dispatchMessage;
+          },
+          get emit() {
+            return emit;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get isMessageQuestionAnswer() {
+            return isMessageQuestionAnswer;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get providerSessions() {
+            return providerSessions;
+          },
+          get recordSubagentFollowup() {
+            return recordSubagentFollowup;
+          },
+          get refuseAboveDispatchModeLimit() {
+            return refuseAboveDispatchModeLimit;
+          },
+          get serverSettings() {
+            return serverSettings;
+          },
+          get turnStartedModes() {
+            return turnStartedModes;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -4458,70 +4534,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchQueuedMessagePromoteToSteer({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get commandPolicy() {
-        return commandPolicy;
-      },
-      get dispatchSteerIntoRun() {
-        return dispatchSteerIntoRun;
-      },
-      get emit() {
-        return emit;
-      },
-      get ensureGoalCommandSupported() {
-        return ensureGoalCommandSupported;
-      },
-      get ensureSteeringMessage() {
-        return ensureSteeringMessage;
-      },
-      get goalDriverFor() {
-        return goalDriverFor;
-      },
-      get isLiveRun() {
-        return isLiveRun;
-      },
-      get limitForbidsParkedSteer() {
-        return limitForbidsParkedSteer;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get providerAdapters() {
-        return providerAdapters;
-      },
-      get queuedRunModelSelection() {
-        return queuedRunModelSelection;
-      },
-      get stopReachedRun() {
-        return stopReachedRun;
-      },
-      get stopRunForQueuedCommand() {
-        return stopRunForQueuedCommand;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchQueuedMessagePromoteToSteer({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get commandPolicy() {
+          return commandPolicy;
+        },
+        get dispatchSteerIntoRun() {
+          return dispatchSteerIntoRun;
+        },
+        get emit() {
+          return emit;
+        },
+        get ensureGoalCommandSupported() {
+          return ensureGoalCommandSupported;
+        },
+        get ensureSteeringMessage() {
+          return ensureSteeringMessage;
+        },
+        get goalDriverFor() {
+          return goalDriverFor;
+        },
+        get isLiveRun() {
+          return isLiveRun;
+        },
+        get limitForbidsParkedSteer() {
+          return limitForbidsParkedSteer;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get providerAdapters() {
+          return providerAdapters;
+        },
+        get queuedRunModelSelection() {
+          return queuedRunModelSelection;
+        },
+        get stopReachedRun() {
+          return stopReachedRun;
+        },
+        get stopRunForQueuedCommand() {
+          return stopRunForQueuedCommand;
+        },
+      })(command, events, effects),
+    );
   });
 
   const dispatchQueuedRunReorder = Effect.fn("Orchestrator.dispatchQueuedRunReorder")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.reorder" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchQueuedRunReorder({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get emit() {
-        return emit;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchQueuedRunReorder({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get emit() {
+          return emit;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+      })(command, events),
+    );
   });
 
   const dispatchQueuedRunCancel = Effect.fn("Orchestrator.dispatchQueuedRunCancel")(function* (
@@ -4640,26 +4720,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchQueuedRunEdit({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get emit() {
-        return emit;
-      },
-      get ensureGoalCommandSupported() {
-        return ensureGoalCommandSupported;
-      },
-      get limitForbidsParkedSteer() {
-        return limitForbidsParkedSteer;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get queuedRunModelSelection() {
-        return queuedRunModelSelection;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchQueuedRunEdit({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get emit() {
+          return emit;
+        },
+        get ensureGoalCommandSupported() {
+          return ensureGoalCommandSupported;
+        },
+        get limitForbidsParkedSteer() {
+          return limitForbidsParkedSteer;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get queuedRunModelSelection() {
+          return queuedRunModelSelection;
+        },
+      })(command, events, effects),
+    );
   });
 
   const subagentCount = (threadId: ThreadId) =>
@@ -4771,29 +4853,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchPreparedRunRelease({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get checkpointService() {
-          return checkpointService;
-        },
-        get emit() {
-          return emit;
-        },
-        get loadProjectionForCommand() {
-          return loadProjectionForCommand;
-        },
-        get mapDispatchError() {
-          return mapDispatchError;
-        },
-        get preparedRunState() {
-          return preparedRunState;
-        },
-        get runtimePolicy() {
-          return runtimePolicy;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchPreparedRunRelease({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get checkpointService() {
+            return checkpointService;
+          },
+          get emit() {
+            return emit;
+          },
+          get loadProjectionForCommand() {
+            return loadProjectionForCommand;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get preparedRunState() {
+            return preparedRunState;
+          },
+          get runtimePolicy() {
+            return runtimePolicy;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -4801,52 +4885,56 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.fail" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchPreparedRunFail({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get emit() {
-        return emit;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get preparedRunState() {
-        return preparedRunState;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchPreparedRunFail({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get emit() {
+          return emit;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get preparedRunState() {
+          return preparedRunState;
+        },
+      })(command, events),
+    );
   });
 
   const dispatchPreparedRunRetry = Effect.fn("Orchestrator.dispatchPreparedRunRetry")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.retry" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    return yield* bindDispatchPreparedRunRetry({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get WORKSPACE_PREPARATION_INPUT() {
-        return WORKSPACE_PREPARATION_INPUT;
-      },
-      get emit() {
-        return emit;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get preparedRunState() {
-        return preparedRunState;
-      },
-      get withoutPreparationResult() {
-        return withoutPreparationResult;
-      },
-    })(command, events) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchPreparedRunRetry({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get WORKSPACE_PREPARATION_INPUT() {
+          return WORKSPACE_PREPARATION_INPUT;
+        },
+        get emit() {
+          return emit;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get preparedRunState() {
+          return preparedRunState;
+        },
+        get withoutPreparationResult() {
+          return withoutPreparationResult;
+        },
+      })(command, events),
+    );
   });
 
   // Ends each native subagent's record, its own thread's runless root turns, and the
@@ -4862,20 +4950,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly childThreadIds: Set<ThreadId>;
       readonly now: DateTime.Utc;
     }) {
-      return yield* bindEndNativeSubagentTrees({
-        get idAllocator() {
-          return idAllocator;
-        },
-        get mapDispatchError() {
-          return mapDispatchError;
-        },
-        get nativeSubagentRef() {
-          return nativeSubagentRef;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-      })(input) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindEndNativeSubagentTrees({
+          get idAllocator() {
+            return idAllocator;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get nativeSubagentRef() {
+            return nativeSubagentRef;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+        })(input),
+      );
     },
   );
 
@@ -4893,17 +4983,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly throughRunOrdinal: number;
     readonly now: DateTime.Utc;
   }) {
-    return yield* bindSettleBackgroundWork({
-      get emit() {
-        return emit;
-      },
-      get endNativeSubagentTrees() {
-        return endNativeSubagentTrees;
-      },
-      get providerSessions() {
-        return providerSessions;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindSettleBackgroundWork({
+        get emit() {
+          return emit;
+        },
+        get endNativeSubagentTrees() {
+          return endNativeSubagentTrees;
+        },
+        get providerSessions() {
+          return providerSessions;
+        },
+      })(input),
+    );
   });
 
   const runInterruptReason = Effect.fnUntraced(function* (
@@ -4961,23 +5053,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>;
     readonly now: DateTime.Utc;
   }) {
-    return yield* bindSettleInterruptedRun({
-      get emit() {
-        return emit;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get runInterruptReason() {
-        return runInterruptReason;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindSettleInterruptedRun({
+        get emit() {
+          return emit;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get runInterruptReason() {
+          return runInterruptReason;
+        },
+      })(input),
+    );
   });
 
   /** Late tool calls and restart continuations must not outlive Stop. */
@@ -5049,41 +5143,43 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly cohortRunIds: ReadonlyArray<RunId>;
     readonly now: DateTime.Utc;
   }) {
-    return yield* bindHoldStoppedThread({
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get awaitsRestartContinuation() {
-        return awaitsRestartContinuation;
-      },
-      get closePendingLinkRequests() {
-        return closePendingLinkRequests;
-      },
-      get dispatchQueuedRunCancel() {
-        return dispatchQueuedRunCancel;
-      },
-      get disposeDelegatedCompletionCohort() {
-        return disposeDelegatedCompletionCohort;
-      },
-      get emit() {
-        return emit;
-      },
-      get getProjectionWithPendingEvents() {
-        return getProjectionWithPendingEvents;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get markStoppedRun() {
-        return markStoppedRun;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get withPullRequestWatch() {
-        return withPullRequestWatch;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindHoldStoppedThread({
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get awaitsRestartContinuation() {
+          return awaitsRestartContinuation;
+        },
+        get closePendingLinkRequests() {
+          return closePendingLinkRequests;
+        },
+        get dispatchQueuedRunCancel() {
+          return dispatchQueuedRunCancel;
+        },
+        get disposeDelegatedCompletionCohort() {
+          return disposeDelegatedCompletionCohort;
+        },
+        get emit() {
+          return emit;
+        },
+        get getProjectionWithPendingEvents() {
+          return getProjectionWithPendingEvents;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get markStoppedRun() {
+          return markStoppedRun;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get withPullRequestWatch() {
+          return withPullRequestWatch;
+        },
+      })(input),
+    );
   });
 
   const dispatchInterruptUnresponsive = Effect.fn("Orchestrator.dispatchInterruptUnresponsive")(
@@ -5144,26 +5240,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchBackgroundWorkSettle({
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get idAllocator() {
-          return idAllocator;
-        },
-        get mapDispatchError() {
-          return mapDispatchError;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get settleBackgroundWork() {
-          return settleBackgroundWork;
-        },
-        get settleInterruptedRun() {
-          return settleInterruptedRun;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchBackgroundWorkSettle({
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get settleBackgroundWork() {
+            return settleBackgroundWork;
+          },
+          get settleInterruptedRun() {
+            return settleInterruptedRun;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -5172,29 +5270,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchSubagentStop({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get cancelledAppOwnedTask() {
-        return cancelledAppOwnedTask;
-      },
-      get emit() {
-        return emit;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get writeAppOwnedTask() {
-        return writeAppOwnedTask;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchSubagentStop({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get cancelledAppOwnedTask() {
+          return cancelledAppOwnedTask;
+        },
+        get emit() {
+          return emit;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get writeAppOwnedTask() {
+          return writeAppOwnedTask;
+        },
+      })(command, events, effects),
+    );
   });
 
   const dispatchRunInterrupt = Effect.fn("Orchestrator.dispatchRunInterrupt")(function* (
@@ -5202,53 +5302,55 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchRunInterrupt({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProviderAdapterError() {
-        return OrchestratorProviderAdapterError;
-      },
-      get WORKSPACE_PREPARATION_INPUT() {
-        return WORKSPACE_PREPARATION_INPUT;
-      },
-      get commandPolicy() {
-        return commandPolicy;
-      },
-      get disposeDelegatedCompletionCohort() {
-        return disposeDelegatedCompletionCohort;
-      },
-      get emit() {
-        return emit;
-      },
-      get getProjectionWithPendingEvents() {
-        return getProjectionWithPendingEvents;
-      },
-      get holdStoppedThread() {
-        return holdStoppedThread;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get nextTurnItemOrdinal() {
-        return nextTurnItemOrdinal;
-      },
-      get providerSessions() {
-        return providerSessions;
-      },
-      get settleBackgroundWork() {
-        return settleBackgroundWork;
-      },
-      get settleInterruptedRun() {
-        return settleInterruptedRun;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchRunInterrupt({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProviderAdapterError() {
+          return OrchestratorProviderAdapterError;
+        },
+        get WORKSPACE_PREPARATION_INPUT() {
+          return WORKSPACE_PREPARATION_INPUT;
+        },
+        get commandPolicy() {
+          return commandPolicy;
+        },
+        get disposeDelegatedCompletionCohort() {
+          return disposeDelegatedCompletionCohort;
+        },
+        get emit() {
+          return emit;
+        },
+        get getProjectionWithPendingEvents() {
+          return getProjectionWithPendingEvents;
+        },
+        get holdStoppedThread() {
+          return holdStoppedThread;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get nextTurnItemOrdinal() {
+          return nextTurnItemOrdinal;
+        },
+        get providerSessions() {
+          return providerSessions;
+        },
+        get settleBackgroundWork() {
+          return settleBackgroundWork;
+        },
+        get settleInterruptedRun() {
+          return settleInterruptedRun;
+        },
+      })(command, events, effects),
+    );
   });
 
   /** Writes a parent's app-owned task, and sets its node and turn items to the task's status. */
@@ -5302,26 +5404,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
       readonly projection: Pick<OrchestrationV2ThreadProjection, "subagents" | "turnItems">;
     }) {
-      return yield* bindCancelIdleOrphans({
-        get OrchestratorProjectionError() {
-          return OrchestratorProjectionError;
-        },
-        get awaitsRestartContinuation() {
-          return awaitsRestartContinuation;
-        },
-        get cancelledAppOwnedTask() {
-          return cancelledAppOwnedTask;
-        },
-        get isOrchestratorProjectionError() {
-          return isOrchestratorProjectionError;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get writeAppOwnedTask() {
-          return writeAppOwnedTask;
-        },
-      })(input) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindCancelIdleOrphans({
+          get OrchestratorProjectionError() {
+            return OrchestratorProjectionError;
+          },
+          get awaitsRestartContinuation() {
+            return awaitsRestartContinuation;
+          },
+          get cancelledAppOwnedTask() {
+            return cancelledAppOwnedTask;
+          },
+          get isOrchestratorProjectionError() {
+            return isOrchestratorProjectionError;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get writeAppOwnedTask() {
+            return writeAppOwnedTask;
+          },
+        })(input),
+      );
     },
     (effect, input) =>
       effect.pipe(
@@ -5346,14 +5450,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly reason: string;
       readonly now: DateTime.Utc;
     }) {
-      return yield* bindStopRunForQueuedCommand({
-        get dispatchRunInterrupt() {
-          return dispatchRunInterrupt;
-        },
-        get emit() {
-          return emit;
-        },
-      })(input) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindStopRunForQueuedCommand({
+          get dispatchRunInterrupt() {
+            return dispatchRunInterrupt;
+          },
+          get emit() {
+            return emit;
+          },
+        })(input),
+      );
     },
   );
 
@@ -5362,41 +5468,43 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    return yield* bindDispatchThreadStop({
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get cancelIdleOrphans() {
-        return cancelIdleOrphans;
-      },
-      get delegatedTasksStopEffect() {
-        return delegatedTasksStopEffect;
-      },
-      get dispatchRunInterrupt() {
-        return dispatchRunInterrupt;
-      },
-      get endNativeSubagentTrees() {
-        return endNativeSubagentTrees;
-      },
-      get hasLiveRun() {
-        return hasLiveRun;
-      },
-      get holdStoppedThread() {
-        return holdStoppedThread;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get markStoppedRun() {
-        return markStoppedRun;
-      },
-      get nativeSubagentRef() {
-        return nativeSubagentRef;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(command, events, effects) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchThreadStop({
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get cancelIdleOrphans() {
+          return cancelIdleOrphans;
+        },
+        get delegatedTasksStopEffect() {
+          return delegatedTasksStopEffect;
+        },
+        get dispatchRunInterrupt() {
+          return dispatchRunInterrupt;
+        },
+        get endNativeSubagentTrees() {
+          return endNativeSubagentTrees;
+        },
+        get hasLiveRun() {
+          return hasLiveRun;
+        },
+        get holdStoppedThread() {
+          return holdStoppedThread;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get markStoppedRun() {
+          return markStoppedRun;
+        },
+        get nativeSubagentRef() {
+          return nativeSubagentRef;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+      })(command, events, effects),
+    );
   });
 
   const dispatchCheckpointRollback = Effect.fn("Orchestrator.dispatchCheckpointRollback")(
@@ -5405,47 +5513,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
-      return yield* bindDispatchCheckpointRollback({
-        get OrchestratorDispatchError() {
-          return OrchestratorDispatchError;
-        },
-        get OrchestratorProviderAdapterError() {
-          return OrchestratorProviderAdapterError;
-        },
-        get commandPolicy() {
-          return commandPolicy;
-        },
-        get emit() {
-          return emit;
-        },
-        get fileSystem() {
-          return fileSystem;
-        },
-        get loadProjectionForCommand() {
-          return loadProjectionForCommand;
-        },
-        get mapDispatchError() {
-          return mapDispatchError;
-        },
-        get path() {
-          return path;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get projects() {
-          return projects;
-        },
-        get providerAdapters() {
-          return providerAdapters;
-        },
-        get providerTurnForRun() {
-          return providerTurnForRun;
-        },
-        get taskFolderStore() {
-          return taskFolderStore;
-        },
-      })(command, events, effects) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindDispatchCheckpointRollback({
+          get OrchestratorDispatchError() {
+            return OrchestratorDispatchError;
+          },
+          get OrchestratorProviderAdapterError() {
+            return OrchestratorProviderAdapterError;
+          },
+          get commandPolicy() {
+            return commandPolicy;
+          },
+          get emit() {
+            return emit;
+          },
+          get fileSystem() {
+            return fileSystem;
+          },
+          get loadProjectionForCommand() {
+            return loadProjectionForCommand;
+          },
+          get mapDispatchError() {
+            return mapDispatchError;
+          },
+          get path() {
+            return path;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get projects() {
+            return projects;
+          },
+          get providerAdapters() {
+            return providerAdapters;
+          },
+          get providerTurnForRun() {
+            return providerTurnForRun;
+          },
+          get taskFolderStore() {
+            return taskFolderStore;
+          },
+        })(command, events, effects),
+      );
     },
   );
 
@@ -5537,29 +5647,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly updatedTask: OrchestrationV2Subagent;
     readonly now: DateTime.Utc;
   }) {
-    return yield* bindPlanDelegatedCompletionDelivery({
-      get completionDeliveryMessage() {
-        return completionDeliveryMessage;
-      },
-      get completionDeliveryRun() {
-        return completionDeliveryRun;
-      },
-      get delegatedCompletionWakeDetail() {
-        return delegatedCompletionWakeDetail;
-      },
-      get hasLiveRun() {
-        return hasLiveRun;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get mapDelegatedCompletionError() {
-        return mapDelegatedCompletionError;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-    })(input) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindPlanDelegatedCompletionDelivery({
+        get completionDeliveryMessage() {
+          return completionDeliveryMessage;
+        },
+        get completionDeliveryRun() {
+          return completionDeliveryRun;
+        },
+        get delegatedCompletionWakeDetail() {
+          return delegatedCompletionWakeDetail;
+        },
+        get hasLiveRun() {
+          return hasLiveRun;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get mapDelegatedCompletionError() {
+          return mapDelegatedCompletionError;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+      })(input),
+    );
   });
 
   // A finished delegate otherwise keeps its provider process until the idle timeout. Callers hold
@@ -5664,47 +5776,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly resultRun?: OrchestrationV2Run;
       },
     ) {
-      return yield* bindFinalizeAppOwnedSubagentTask({
-        get childAwaitsRestartContinuation() {
-          return childAwaitsRestartContinuation;
-        },
-        get contextSourcePointForRun() {
-          return contextSourcePointForRun;
-        },
-        get delegatedCompletionPlanEvents() {
-          return delegatedCompletionPlanEvents;
-        },
-        get delegatedTaskTerminalStatus() {
-          return delegatedTaskTerminalStatus;
-        },
-        get idAllocator() {
-          return idAllocator;
-        },
-        get offerDelegatedCompletionDelivery() {
-          return offerDelegatedCompletionDelivery;
-        },
-        get planDelegatedCompletionDelivery() {
-          return planDelegatedCompletionDelivery;
-        },
-        get projectionStore() {
-          return projectionStore;
-        },
-        get readAllDelegatedChildControls() {
-          return readAllDelegatedChildControls;
-        },
-        get readDelegatedCompletionPlanRecords() {
-          return readDelegatedCompletionPlanRecords;
-        },
-        get releaseFinishedDelegateSessions() {
-          return releaseFinishedDelegateSessions;
-        },
-        get reportRunsRead() {
-          return reportRunsRead;
-        },
-        get writeSystemEvents() {
-          return writeSystemEvents;
-        },
-      })(childControls, options) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindFinalizeAppOwnedSubagentTask({
+          get childAwaitsRestartContinuation() {
+            return childAwaitsRestartContinuation;
+          },
+          get contextSourcePointForRun() {
+            return contextSourcePointForRun;
+          },
+          get delegatedCompletionPlanEvents() {
+            return delegatedCompletionPlanEvents;
+          },
+          get delegatedTaskTerminalStatus() {
+            return delegatedTaskTerminalStatus;
+          },
+          get idAllocator() {
+            return idAllocator;
+          },
+          get offerDelegatedCompletionDelivery() {
+            return offerDelegatedCompletionDelivery;
+          },
+          get planDelegatedCompletionDelivery() {
+            return planDelegatedCompletionDelivery;
+          },
+          get projectionStore() {
+            return projectionStore;
+          },
+          get readAllDelegatedChildControls() {
+            return readAllDelegatedChildControls;
+          },
+          get readDelegatedCompletionPlanRecords() {
+            return readDelegatedCompletionPlanRecords;
+          },
+          get releaseFinishedDelegateSessions() {
+            return releaseFinishedDelegateSessions;
+          },
+          get reportRunsRead() {
+            return reportRunsRead;
+          },
+          get writeSystemEvents() {
+            return writeSystemEvents;
+          },
+        })(childControls, options),
+      );
     },
   );
 
@@ -5721,51 +5835,55 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     childThreadId: ThreadId,
     options?: { readonly settledContinuationOf?: RunId; readonly syncRunId?: RunId },
   ) {
-    return yield* bindFinalizeAppOwnedSubagent({
-      get childAwaitsRestartContinuation() {
-        return childAwaitsRestartContinuation;
-      },
-      get delegatedTaskTerminalStatus() {
-        return delegatedTaskTerminalStatus;
-      },
-      get dispatchWithReceipt() {
-        return dispatchWithReceipt;
-      },
-      get finalizeAppOwnedSubagentTask() {
-        return finalizeAppOwnedSubagentTask;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get readDelegatedChildControls() {
-        return readDelegatedChildControls;
-      },
-    })(childThreadId, options) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindFinalizeAppOwnedSubagent({
+        get childAwaitsRestartContinuation() {
+          return childAwaitsRestartContinuation;
+        },
+        get delegatedTaskTerminalStatus() {
+          return delegatedTaskTerminalStatus;
+        },
+        get dispatchWithReceipt() {
+          return dispatchWithReceipt;
+        },
+        get finalizeAppOwnedSubagentTask() {
+          return finalizeAppOwnedSubagentTask;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get readDelegatedChildControls() {
+          return readDelegatedChildControls;
+        },
+      })(childThreadId, options),
+    );
   });
 
   const finalizeDelegatedCompletionDelivery = Effect.fn(
     "Orchestrator.finalizeDelegatedCompletionDelivery",
   )(function* (threadId: ThreadId, runId: RunId) {
-    return yield* bindFinalizeDelegatedCompletionDelivery({
-      get idAllocator() {
-        return idAllocator;
-      },
-      get isTerminalDelegatedTaskStatus() {
-        return isTerminalDelegatedTaskStatus;
-      },
-      get mapDelegatedCompletionError() {
-        return mapDelegatedCompletionError;
-      },
-      get offerDelegatedCompletionDelivery() {
-        return offerDelegatedCompletionDelivery;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get writeSystemEvents() {
-        return writeSystemEvents;
-      },
-    })(threadId, runId) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindFinalizeDelegatedCompletionDelivery({
+        get idAllocator() {
+          return idAllocator;
+        },
+        get isTerminalDelegatedTaskStatus() {
+          return isTerminalDelegatedTaskStatus;
+        },
+        get mapDelegatedCompletionError() {
+          return mapDelegatedCompletionError;
+        },
+        get offerDelegatedCompletionDelivery() {
+          return offerDelegatedCompletionDelivery;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get writeSystemEvents() {
+          return writeSystemEvents;
+        },
+      })(threadId, runId),
+    );
   });
 
   const dispatchNotificationAccepted = Effect.fn("orchestrationV2.notificationAccepted")(function* (
@@ -5818,197 +5936,199 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
     OrchestratorV2Error
   > {
-    return yield* bindDispatchOnce({
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get OrchestratorV2Error() {
-        return OrchestratorV2Error;
-      },
-      get QUEUED_TURN_START_GRACE_MS() {
-        return QUEUED_TURN_START_GRACE_MS;
-      },
-      get cancelIdleOrphans() {
-        return cancelIdleOrphans;
-      },
-      get commandThreadId() {
-        return commandThreadId;
-      },
-      get delegatedTasksStopEffect() {
-        return delegatedTasksStopEffect;
-      },
-      get dispatchBackgroundWorkSettle() {
-        return dispatchBackgroundWorkSettle;
-      },
-      get dispatchCheckpointRollback() {
-        return dispatchCheckpointRollback;
-      },
-      get dispatchCheckpointRollbackFail() {
-        return dispatchCheckpointRollbackFail;
-      },
-      get dispatchCreatedThreadRecord() {
-        return dispatchCreatedThreadRecord;
-      },
-      get dispatchDelegatedTaskCompletionDeliveryResolution() {
-        return dispatchDelegatedTaskCompletionDeliveryResolution;
-      },
-      get dispatchDelegatedTaskRequest() {
-        return dispatchDelegatedTaskRequest;
-      },
-      get dispatchDelegatedTaskWakePolicy() {
-        return dispatchDelegatedTaskWakePolicy;
-      },
-      get dispatchFeedbackRequestRecord() {
-        return dispatchFeedbackRequestRecord;
-      },
-      get dispatchGuestShare() {
-        return dispatchGuestShare;
-      },
-      get dispatchInterruptUnresponsive() {
-        return dispatchInterruptUnresponsive;
-      },
-      get dispatchLinkRequestRecord() {
-        return dispatchLinkRequestRecord;
-      },
-      get dispatchMessage() {
-        return dispatchMessage;
-      },
-      get dispatchNotificationAccepted() {
-        return dispatchNotificationAccepted;
-      },
-      get dispatchPreparedRunFail() {
-        return dispatchPreparedRunFail;
-      },
-      get dispatchPreparedRunProgress() {
-        return dispatchPreparedRunProgress;
-      },
-      get dispatchPreparedRunRelease() {
-        return dispatchPreparedRunRelease;
-      },
-      get dispatchPreparedRunRetry() {
-        return dispatchPreparedRunRetry;
-      },
-      get dispatchProviderSessionDetach() {
-        return dispatchProviderSessionDetach;
-      },
-      get dispatchPullRequestWatchSync() {
-        return dispatchPullRequestWatchSync;
-      },
-      get dispatchQueuedMessagePromoteToSteer() {
-        return dispatchQueuedMessagePromoteToSteer;
-      },
-      get dispatchQueuedRunCancel() {
-        return dispatchQueuedRunCancel;
-      },
-      get dispatchQueuedRunEdit() {
-        return dispatchQueuedRunEdit;
-      },
-      get dispatchQueuedRunReorder() {
-        return dispatchQueuedRunReorder;
-      },
-      get dispatchRemoteDelegatedTaskComplete() {
-        return dispatchRemoteDelegatedTaskComplete;
-      },
-      get dispatchRemoteDelegatedTaskRequest() {
-        return dispatchRemoteDelegatedTaskRequest;
-      },
-      get dispatchRemoteDelegatedTaskStop() {
-        return dispatchRemoteDelegatedTaskStop;
-      },
-      get dispatchRunInterrupt() {
-        return dispatchRunInterrupt;
-      },
-      get dispatchRunOutputSubmit() {
-        return dispatchRunOutputSubmit;
-      },
-      get dispatchRuntimeRequestDeliveryFail() {
-        return dispatchRuntimeRequestDeliveryFail;
-      },
-      get dispatchRuntimeRequestRespond() {
-        return dispatchRuntimeRequestRespond;
-      },
-      get dispatchSecretRequestRecord() {
-        return dispatchSecretRequestRecord;
-      },
-      get dispatchSubagentStop() {
-        return dispatchSubagentStop;
-      },
-      get dispatchThreadCreate() {
-        return dispatchThreadCreate;
-      },
-      get dispatchThreadFork() {
-        return dispatchThreadFork;
-      },
-      get dispatchThreadMergeBack() {
-        return dispatchThreadMergeBack;
-      },
-      get dispatchThreadMutation() {
-        return dispatchThreadMutation;
-      },
-      get dispatchThreadProjectAdoptFolder() {
-        return dispatchThreadProjectAdoptFolder;
-      },
-      get dispatchThreadStop() {
-        return dispatchThreadStop;
-      },
-      get dispatchThreadUserInputDismiss() {
-        return dispatchThreadUserInputDismiss;
-      },
-      get dispatchThreadVisit() {
-        return dispatchThreadVisit;
-      },
-      get dispatchUnsupported() {
-        return dispatchUnsupported;
-      },
-      get emit() {
-        return emit;
-      },
-      get emitGuestMessageSent() {
-        return emitGuestMessageSent;
-      },
-      get findThread() {
-        return findThread;
-      },
-      get hasRunningDelegatedTasks() {
-        return hasRunningDelegatedTasks;
-      },
-      get idAllocator() {
-        return idAllocator;
-      },
-      get loadProjectionForCommand() {
-        return loadProjectionForCommand;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get metadataUpdateContinuation() {
-        return metadataUpdateContinuation;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get queuedRunModelSelection() {
-        return queuedRunModelSelection;
-      },
-      get recordSubagentFollowup() {
-        return recordSubagentFollowup;
-      },
-      get refuseNativeSubagentMessage() {
-        return refuseNativeSubagentMessage;
-      },
-      get threadCreateInitialMessage() {
-        return threadCreateInitialMessage;
-      },
-      get usageLimitHoldsQueue() {
-        return usageLimitHoldsQueue;
-      },
-      get worktreeSetupPending() {
-        return worktreeSetupPending;
-      },
-    })(command, sideChatIds) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchOnce({
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get OrchestratorV2Error() {
+          return OrchestratorV2Error;
+        },
+        get QUEUED_TURN_START_GRACE_MS() {
+          return QUEUED_TURN_START_GRACE_MS;
+        },
+        get cancelIdleOrphans() {
+          return cancelIdleOrphans;
+        },
+        get commandThreadId() {
+          return commandThreadId;
+        },
+        get delegatedTasksStopEffect() {
+          return delegatedTasksStopEffect;
+        },
+        get dispatchBackgroundWorkSettle() {
+          return dispatchBackgroundWorkSettle;
+        },
+        get dispatchCheckpointRollback() {
+          return dispatchCheckpointRollback;
+        },
+        get dispatchCheckpointRollbackFail() {
+          return dispatchCheckpointRollbackFail;
+        },
+        get dispatchCreatedThreadRecord() {
+          return dispatchCreatedThreadRecord;
+        },
+        get dispatchDelegatedTaskCompletionDeliveryResolution() {
+          return dispatchDelegatedTaskCompletionDeliveryResolution;
+        },
+        get dispatchDelegatedTaskRequest() {
+          return dispatchDelegatedTaskRequest;
+        },
+        get dispatchDelegatedTaskWakePolicy() {
+          return dispatchDelegatedTaskWakePolicy;
+        },
+        get dispatchFeedbackRequestRecord() {
+          return dispatchFeedbackRequestRecord;
+        },
+        get dispatchGuestShare() {
+          return dispatchGuestShare;
+        },
+        get dispatchInterruptUnresponsive() {
+          return dispatchInterruptUnresponsive;
+        },
+        get dispatchLinkRequestRecord() {
+          return dispatchLinkRequestRecord;
+        },
+        get dispatchMessage() {
+          return dispatchMessage;
+        },
+        get dispatchNotificationAccepted() {
+          return dispatchNotificationAccepted;
+        },
+        get dispatchPreparedRunFail() {
+          return dispatchPreparedRunFail;
+        },
+        get dispatchPreparedRunProgress() {
+          return dispatchPreparedRunProgress;
+        },
+        get dispatchPreparedRunRelease() {
+          return dispatchPreparedRunRelease;
+        },
+        get dispatchPreparedRunRetry() {
+          return dispatchPreparedRunRetry;
+        },
+        get dispatchProviderSessionDetach() {
+          return dispatchProviderSessionDetach;
+        },
+        get dispatchPullRequestWatchSync() {
+          return dispatchPullRequestWatchSync;
+        },
+        get dispatchQueuedMessagePromoteToSteer() {
+          return dispatchQueuedMessagePromoteToSteer;
+        },
+        get dispatchQueuedRunCancel() {
+          return dispatchQueuedRunCancel;
+        },
+        get dispatchQueuedRunEdit() {
+          return dispatchQueuedRunEdit;
+        },
+        get dispatchQueuedRunReorder() {
+          return dispatchQueuedRunReorder;
+        },
+        get dispatchRemoteDelegatedTaskComplete() {
+          return dispatchRemoteDelegatedTaskComplete;
+        },
+        get dispatchRemoteDelegatedTaskRequest() {
+          return dispatchRemoteDelegatedTaskRequest;
+        },
+        get dispatchRemoteDelegatedTaskStop() {
+          return dispatchRemoteDelegatedTaskStop;
+        },
+        get dispatchRunInterrupt() {
+          return dispatchRunInterrupt;
+        },
+        get dispatchRunOutputSubmit() {
+          return dispatchRunOutputSubmit;
+        },
+        get dispatchRuntimeRequestDeliveryFail() {
+          return dispatchRuntimeRequestDeliveryFail;
+        },
+        get dispatchRuntimeRequestRespond() {
+          return dispatchRuntimeRequestRespond;
+        },
+        get dispatchSecretRequestRecord() {
+          return dispatchSecretRequestRecord;
+        },
+        get dispatchSubagentStop() {
+          return dispatchSubagentStop;
+        },
+        get dispatchThreadCreate() {
+          return dispatchThreadCreate;
+        },
+        get dispatchThreadFork() {
+          return dispatchThreadFork;
+        },
+        get dispatchThreadMergeBack() {
+          return dispatchThreadMergeBack;
+        },
+        get dispatchThreadMutation() {
+          return dispatchThreadMutation;
+        },
+        get dispatchThreadProjectAdoptFolder() {
+          return dispatchThreadProjectAdoptFolder;
+        },
+        get dispatchThreadStop() {
+          return dispatchThreadStop;
+        },
+        get dispatchThreadUserInputDismiss() {
+          return dispatchThreadUserInputDismiss;
+        },
+        get dispatchThreadVisit() {
+          return dispatchThreadVisit;
+        },
+        get dispatchUnsupported() {
+          return dispatchUnsupported;
+        },
+        get emit() {
+          return emit;
+        },
+        get emitGuestMessageSent() {
+          return emitGuestMessageSent;
+        },
+        get findThread() {
+          return findThread;
+        },
+        get hasRunningDelegatedTasks() {
+          return hasRunningDelegatedTasks;
+        },
+        get idAllocator() {
+          return idAllocator;
+        },
+        get loadProjectionForCommand() {
+          return loadProjectionForCommand;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get metadataUpdateContinuation() {
+          return metadataUpdateContinuation;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get queuedRunModelSelection() {
+          return queuedRunModelSelection;
+        },
+        get recordSubagentFollowup() {
+          return recordSubagentFollowup;
+        },
+        get refuseNativeSubagentMessage() {
+          return refuseNativeSubagentMessage;
+        },
+        get threadCreateInitialMessage() {
+          return threadCreateInitialMessage;
+        },
+        get usageLimitHoldsQueue() {
+          return usageLimitHoldsQueue;
+        },
+        get worktreeSetupPending() {
+          return worktreeSetupPending;
+        },
+      })(command, sideChatIds),
+    );
   });
 
   const replayCommandReceipt = Effect.fn("orchestrationV2.dispatch.replayReceipt")(function* (
@@ -6065,77 +6185,79 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     sideChatIds: ReadonlyArray<ThreadId> = [],
     cancelledTask?: OrchestrationV2Subagent,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
-    return yield* bindDispatchWithReceiptEffect({
-      get OrchestratorCommandIdConflictError() {
-        return OrchestratorCommandIdConflictError;
-      },
-      get OrchestratorCommandPreviouslyRejectedError() {
-        return OrchestratorCommandPreviouslyRejectedError;
-      },
-      get OrchestratorCommandRejectedError() {
-        return OrchestratorCommandRejectedError;
-      },
-      get OrchestratorDispatchError() {
-        return OrchestratorDispatchError;
-      },
-      get OrchestratorProjectionError() {
-        return OrchestratorProjectionError;
-      },
-      get OrchestratorRuntimeModeAboveCeilingError() {
-        return OrchestratorRuntimeModeAboveCeilingError;
-      },
-      get OrchestratorV2Error() {
-        return OrchestratorV2Error;
-      },
-      get commandReceipts() {
-        return commandReceipts;
-      },
-      get commandThreadId() {
-        return commandThreadId;
-      },
-      get dispatchOnce() {
-        return dispatchOnce;
-      },
-      get eventSink() {
-        return eventSink;
-      },
-      get isUnobservedAcknowledgement() {
-        return isUnobservedAcknowledgement;
-      },
-      get makeSystemEvent() {
-        return makeSystemEvent;
-      },
-      get mapDispatchError() {
-        return mapDispatchError;
-      },
-      get offerDelegatedCompletionDeliveries() {
-        return offerDelegatedCompletionDeliveries;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get refuseAboveDispatchModeLimit() {
-        return refuseAboveDispatchModeLimit;
-      },
-      get refuseAboveRuntimeModeCeiling() {
-        return refuseAboveRuntimeModeCeiling;
-      },
-      get replayCommandReceipt() {
-        return replayCommandReceipt;
-      },
-      get requeueUnreadSteers() {
-        return requeueUnreadSteers;
-      },
-      get runtimeModeCeiling() {
-        return runtimeModeCeiling;
-      },
-      get runtimePolicyCeilingCause() {
-        return runtimePolicyCeilingCause;
-      },
-      get startNextQueuedRun() {
-        return startNextQueuedRun;
-      },
-    })(command, sideChatIds, cancelledTask) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchWithReceiptEffect({
+        get OrchestratorCommandIdConflictError() {
+          return OrchestratorCommandIdConflictError;
+        },
+        get OrchestratorCommandPreviouslyRejectedError() {
+          return OrchestratorCommandPreviouslyRejectedError;
+        },
+        get OrchestratorCommandRejectedError() {
+          return OrchestratorCommandRejectedError;
+        },
+        get OrchestratorDispatchError() {
+          return OrchestratorDispatchError;
+        },
+        get OrchestratorProjectionError() {
+          return OrchestratorProjectionError;
+        },
+        get OrchestratorRuntimeModeAboveCeilingError() {
+          return OrchestratorRuntimeModeAboveCeilingError;
+        },
+        get OrchestratorV2Error() {
+          return OrchestratorV2Error;
+        },
+        get commandReceipts() {
+          return commandReceipts;
+        },
+        get commandThreadId() {
+          return commandThreadId;
+        },
+        get dispatchOnce() {
+          return dispatchOnce;
+        },
+        get eventSink() {
+          return eventSink;
+        },
+        get isUnobservedAcknowledgement() {
+          return isUnobservedAcknowledgement;
+        },
+        get makeSystemEvent() {
+          return makeSystemEvent;
+        },
+        get mapDispatchError() {
+          return mapDispatchError;
+        },
+        get offerDelegatedCompletionDeliveries() {
+          return offerDelegatedCompletionDeliveries;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get refuseAboveDispatchModeLimit() {
+          return refuseAboveDispatchModeLimit;
+        },
+        get refuseAboveRuntimeModeCeiling() {
+          return refuseAboveRuntimeModeCeiling;
+        },
+        get replayCommandReceipt() {
+          return replayCommandReceipt;
+        },
+        get requeueUnreadSteers() {
+          return requeueUnreadSteers;
+        },
+        get runtimeModeCeiling() {
+          return runtimeModeCeiling;
+        },
+        get runtimePolicyCeilingCause() {
+          return runtimePolicyCeilingCause;
+        },
+        get startNextQueuedRun() {
+          return startNextQueuedRun;
+        },
+      })(command, sideChatIds, cancelledTask),
+    );
   }, withCommandMetrics);
 
   // Follow-up intake and Stop serialize on the parent before taking the child lock.
@@ -6149,38 +6271,40 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
-    return yield* bindDispatchWithReceipt({
-      get awaitLatestRunCapture() {
-        return awaitLatestRunCapture;
-      },
-      get commandThreadId() {
-        return commandThreadId;
-      },
-      get dispatchWithReceiptEffect() {
-        return dispatchWithReceiptEffect;
-      },
-      get findThread() {
-        return findThread;
-      },
-      get liveSideChatIds() {
-        return liveSideChatIds;
-      },
-      get mayStartSubagentFollowup() {
-        return mayStartSubagentFollowup;
-      },
-      get messageIntake() {
-        return messageIntake;
-      },
-      get metadataUpdateContinuation() {
-        return metadataUpdateContinuation;
-      },
-      get threadDispatch() {
-        return threadDispatch;
-      },
-      get withSubagentParentLock() {
-        return withSubagentParentLock;
-      },
-    })(command) as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindDispatchWithReceipt({
+        get awaitLatestRunCapture() {
+          return awaitLatestRunCapture;
+        },
+        get commandThreadId() {
+          return commandThreadId;
+        },
+        get dispatchWithReceiptEffect() {
+          return dispatchWithReceiptEffect;
+        },
+        get findThread() {
+          return findThread;
+        },
+        get liveSideChatIds() {
+          return liveSideChatIds;
+        },
+        get mayStartSubagentFollowup() {
+          return mayStartSubagentFollowup;
+        },
+        get messageIntake() {
+          return messageIntake;
+        },
+        get metadataUpdateContinuation() {
+          return metadataUpdateContinuation;
+        },
+        get threadDispatch() {
+          return threadDispatch;
+        },
+        get withSubagentParentLock() {
+          return withSubagentParentLock;
+        },
+      })(command),
+    );
   });
 
   const parentTaskSyncRetries = yield* FiberSet.make();
@@ -6236,35 +6360,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
   const handleRunUpdate = Effect.fn("Orchestrator.handleRunUpdate")(
     function* (stored: OrchestrationV2StoredEvent) {
-      return yield* bindHandleRunUpdate({
-        get awaitsCheckpointCapture() {
-          return awaitsCheckpointCapture;
-        },
-        get delegatedTaskTerminalStatus() {
-          return delegatedTaskTerminalStatus;
-        },
-        get finalizeDelegatedCompletionDelivery() {
-          return finalizeDelegatedCompletionDelivery;
-        },
-        get releaseUnattendedHolds() {
-          return releaseUnattendedHolds;
-        },
-        get requeueUnreadSteers() {
-          return requeueUnreadSteers;
-        },
-        get retryContinuationStart() {
-          return retryContinuationStart;
-        },
-        get startNextQueuedRun() {
-          return startNextQueuedRun;
-        },
-        get threadDispatch() {
-          return threadDispatch;
-        },
-        get updateDelegatedParentTask() {
-          return updateDelegatedParentTask;
-        },
-      })(stored) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindHandleRunUpdate({
+          get awaitsCheckpointCapture() {
+            return awaitsCheckpointCapture;
+          },
+          get delegatedTaskTerminalStatus() {
+            return delegatedTaskTerminalStatus;
+          },
+          get finalizeDelegatedCompletionDelivery() {
+            return finalizeDelegatedCompletionDelivery;
+          },
+          get releaseUnattendedHolds() {
+            return releaseUnattendedHolds;
+          },
+          get requeueUnreadSteers() {
+            return requeueUnreadSteers;
+          },
+          get retryContinuationStart() {
+            return retryContinuationStart;
+          },
+          get startNextQueuedRun() {
+            return startNextQueuedRun;
+          },
+          get threadDispatch() {
+            return threadDispatch;
+          },
+          get updateDelegatedParentTask() {
+            return updateDelegatedParentTask;
+          },
+        })(stored),
+      );
     },
     (effect, stored) =>
       effect.pipe(
@@ -6405,29 +6531,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   );
 
   const recoverDelegatedTasks = Effect.gen(function* () {
-    return yield* bindRecoverDelegatedTasks({
-      get delegatedTaskTerminalStatus() {
-        return delegatedTaskTerminalStatus;
-      },
-      get finalizeAppOwnedSubagent() {
-        return finalizeAppOwnedSubagent;
-      },
-      get finalizeDelegatedCompletionDelivery() {
-        return finalizeDelegatedCompletionDelivery;
-      },
-      get offerDelegatedCompletionDelivery() {
-        return offerDelegatedCompletionDelivery;
-      },
-      get projectionStore() {
-        return projectionStore;
-      },
-      get requeueUnreadSteers() {
-        return requeueUnreadSteers;
-      },
-      get threadDispatch() {
-        return threadDispatch;
-      },
-    })() as Effect.Effect<any, never, never>;
+    return yield* yieldNativeSplit(
+      bindRecoverDelegatedTasks({
+        get delegatedTaskTerminalStatus() {
+          return delegatedTaskTerminalStatus;
+        },
+        get finalizeAppOwnedSubagent() {
+          return finalizeAppOwnedSubagent;
+        },
+        get finalizeDelegatedCompletionDelivery() {
+          return finalizeDelegatedCompletionDelivery;
+        },
+        get offerDelegatedCompletionDelivery() {
+          return offerDelegatedCompletionDelivery;
+        },
+        get projectionStore() {
+          return projectionStore;
+        },
+        get requeueUnreadSteers() {
+          return requeueUnreadSteers;
+        },
+        get threadDispatch() {
+          return threadDispatch;
+        },
+      })(),
+    );
   });
 
   const delegatedTaskResultPending = Effect.fn("Orchestrator.delegatedTaskResultPending")(

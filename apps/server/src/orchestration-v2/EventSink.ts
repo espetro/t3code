@@ -1,11 +1,5 @@
 import {
   CommandId,
-  type OrchestrationV2Run,
-  OrchestrationV2DomainEvent,
-  type OrchestrationV2ProviderThread,
-  type OrchestrationV2Subagent,
-  type OrchestrationV2TurnItem,
-  OrchestrationV2StoredEvent,
   ProviderThreadId,
   RunAttemptId,
   RunId,
@@ -13,7 +7,15 @@ import {
   NodeId,
   type ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import {
+  type OrchestrationV2Run,
+  OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
+  type OrchestrationV2TurnItem,
+  OrchestrationV2StoredEvent,
+} from "@t3tools/contracts/orchestrationV2";
 import * as ProviderCommitBatch from "./ProviderCommitBatch.ts";
 import * as ThreadViewers from "./ThreadViewers.ts";
 import * as Context from "effect/Context";

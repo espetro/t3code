@@ -1,11 +1,12 @@
 import {
   type ApplicationProjectEvent,
   type ApplicationStoredEvent,
-  CommandId,
+} from "@t3tools/contracts/applicationEvent";
+import { CommandId, ThreadId } from "@t3tools/contracts/baseSchemas";
+import {
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
-  ThreadId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

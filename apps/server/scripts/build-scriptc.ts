@@ -279,6 +279,39 @@ async function main(): Promise<number> {
             "#t3/storage-cleanup": ["./storageCleanup.native.ts"],
             "#t3/mcp-session-registry": ["./mcp/McpSessionRegistry.native.ts"],
             "@t3tools/contracts": ["../../../packages/contracts/src/scriptcIsland.ts"],
+            "@t3tools/contracts/orchestrationV2": [
+              "../../../packages/contracts/src/orchestrationV2.ts",
+            ],
+            "@t3tools/contracts/applicationEvent": [
+              "../../../packages/contracts/src/applicationEvent.ts",
+            ],
+            "@t3tools/contracts/baseSchemas": ["../../../packages/contracts/src/baseSchemas.ts"],
+            "@t3tools/contracts/auth": ["../../../packages/contracts/src/auth.ts"],
+            "@t3tools/contracts/orchestrationDispatch": [
+              "../../../packages/contracts/src/orchestrationDispatch.ts",
+            ],
+            "@t3tools/contracts/settings": ["../../../packages/contracts/src/settings.ts"],
+            "@t3tools/contracts/issue": ["../../../packages/contracts/src/issue.ts"],
+            "@t3tools/contracts/guestShare": ["../../../packages/contracts/src/guestShare.ts"],
+            "@t3tools/contracts/chatAttachment": [
+              "../../../packages/contracts/src/chatAttachment.ts",
+            ],
+            "@t3tools/contracts/modelSelection": [
+              "../../../packages/contracts/src/modelSelection.ts",
+            ],
+            "@t3tools/contracts/providerInstance": [
+              "../../../packages/contracts/src/providerInstance.ts",
+            ],
+            "@t3tools/contracts/providerPolicy": [
+              "../../../packages/contracts/src/providerPolicy.ts",
+            ],
+            "@t3tools/contracts/managedPolicy": [
+              "../../../packages/contracts/src/managedPolicy.ts",
+            ],
+            "@t3tools/contracts/threadPullRequest": [
+              "../../../packages/contracts/src/threadPullRequest.ts",
+            ],
+            "@t3tools/contracts/project": ["../../../packages/contracts/src/project.ts"],
             "@t3tools/provider-opencode/server/OpenCodeRuntime": [
               "./scriptc-stubs/OpenCodeRuntime.ts",
             ],

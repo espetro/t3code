@@ -1,5 +1,6 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
-import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
+import { applyOrchestrationV2ThreadVisit } from "@t3tools/contracts/orchestrationV2";
+import { pendingGuestMessageCount } from "@t3tools/contracts/guestShare";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -11,7 +12,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
 import {
   latestRootProviderFailure,
   latestUnheldRun,
@@ -32,7 +33,6 @@ import type {
   OrchestrationV2ExecutionNode,
   OrchestrationV2PlanArtifact,
   OrchestrationV2PendingRuntimeRequestSummary,
-  PlanId,
   OrchestrationV2ConversationMessage,
   OrchestrationV2ContextTransfer,
   OrchestrationV2DomainEvent,
@@ -49,11 +49,14 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+} from "@t3tools/contracts/orchestrationV2";
+import type {
+  PlanId,
   GuestShareId,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
 import {
   IDLE_COMPACTION_TEXT,
   idleCompactionOf,
@@ -75,6 +78,8 @@ import {
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
   orchestrationV2RunWorkStartedAt,
+} from "@t3tools/contracts/orchestrationV2";
+import {
   RunId,
   MessageId,
   RuntimeRequestId,
@@ -85,8 +90,8 @@ import {
   TurnItemId,
   NodeId,
   ProjectId,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import { ProviderInstanceId } from "@t3tools/contracts/providerInstance";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import {
   deriveBlockedOnThreadWait,
@@ -157,6 +162,7 @@ import {
   bindGetThreadSnapshotWindow,
   bindGetAgentAwarenessSnapshot,
 } from "./projectionStoreSplits.ts";
+import { yieldNativeSplit } from "./scriptcBindScope.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -2547,125 +2553,127 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(
         function* (event) {
-          return yield* bindApply({
-            get ProjectionStoreApplyEventError() {
-              return ProjectionStoreApplyEventError;
-            },
-            get ProviderBatchProjectionState() {
-              return ProviderBatchProjectionState;
-            },
-            get attributePendingBackgroundTasks() {
-              return attributePendingBackgroundTasks;
-            },
-            get decodeProviderThreadPayload() {
-              return decodeProviderThreadPayload;
-            },
-            get decodeProviderTurnPayload() {
-              return decodeProviderTurnPayload;
-            },
-            get decodeThreadPayload() {
-              return decodeThreadPayload;
-            },
-            get encodeCheckpointPayload() {
-              return encodeCheckpointPayload;
-            },
-            get encodeCheckpointScopePayload() {
-              return encodeCheckpointScopePayload;
-            },
-            get encodeContextHandoffPayload() {
-              return encodeContextHandoffPayload;
-            },
-            get encodeContextTransferPayload() {
-              return encodeContextTransferPayload;
-            },
-            get encodeMessagePayload() {
-              return encodeMessagePayload;
-            },
-            get encodeNodePayload() {
-              return encodeNodePayload;
-            },
-            get encodePayloadTimestamp() {
-              return encodePayloadTimestamp;
-            },
-            get encodePlanPayload() {
-              return encodePlanPayload;
-            },
-            get encodeProviderSessionPayload() {
-              return encodeProviderSessionPayload;
-            },
-            get encodeProviderThreadPayload() {
-              return encodeProviderThreadPayload;
-            },
-            get encodeProviderTurnPayload() {
-              return encodeProviderTurnPayload;
-            },
-            get encodeRestartCancelledBackgroundWork() {
-              return encodeRestartCancelledBackgroundWork;
-            },
-            get encodeRunAttemptPayload() {
-              return encodeRunAttemptPayload;
-            },
-            get encodeRunOutput() {
-              return encodeRunOutput;
-            },
-            get encodeRunPayload() {
-              return encodeRunPayload;
-            },
-            get encodeRuntimeRequestPayload() {
-              return encodeRuntimeRequestPayload;
-            },
-            get encodeSubagentPayload() {
-              return encodeSubagentPayload;
-            },
-            get encodeThreadPayload() {
-              return encodeThreadPayload;
-            },
-            get encodeThreadUpdatedAt() {
-              return encodeThreadUpdatedAt;
-            },
-            get encodeTurnItemPayload() {
-              return encodeTurnItemPayload;
-            },
-            get getThread() {
-              return getThread;
-            },
-            get booleanInt() {
-              return booleanInt;
-            },
-            get nullableStringField() {
-              return nullableStringField;
-            },
-            get parseEncodedPayload() {
-              return parseEncodedPayload;
-            },
-            get stringField() {
-              return stringField;
-            },
-            get sql() {
-              return sql;
-            },
-            get timelineIndexes() {
-              return timelineIndexes;
-            },
-            get upsertProviderTurn() {
-              return upsertProviderTurn;
-            },
-            get writeThreadTouches() {
-              return writeThreadTouches;
-            },
-            get apply() {
-              return apply;
-            },
-            get isInlineWorkOutput() {
-              return isInlineWorkOutput;
-            },
-            get keepRecordedRunField() {
-              return keepRecordedRunField;
-            },
-            get keepRecordedRunOutput() {
-              return keepRecordedRunOutput;
-            },
-          })(event) as Effect.Effect<any, never, never>;
+          return yield* yieldNativeSplit(
+            bindApply({
+              get ProjectionStoreApplyEventError() {
+                return ProjectionStoreApplyEventError;
+              },
+              get ProviderBatchProjectionState() {
+                return ProviderBatchProjectionState;
+              },
+              get attributePendingBackgroundTasks() {
+                return attributePendingBackgroundTasks;
+              },
+              get decodeProviderThreadPayload() {
+                return decodeProviderThreadPayload;
+              },
+              get decodeProviderTurnPayload() {
+                return decodeProviderTurnPayload;
+              },
+              get decodeThreadPayload() {
+                return decodeThreadPayload;
+              },
+              get encodeCheckpointPayload() {
+                return encodeCheckpointPayload;
+              },
+              get encodeCheckpointScopePayload() {
+                return encodeCheckpointScopePayload;
+              },
+              get encodeContextHandoffPayload() {
+                return encodeContextHandoffPayload;
+              },
+              get encodeContextTransferPayload() {
+                return encodeContextTransferPayload;
+              },
+              get encodeMessagePayload() {
+                return encodeMessagePayload;
+              },
+              get encodeNodePayload() {
+                return encodeNodePayload;
+              },
+              get encodePayloadTimestamp() {
+                return encodePayloadTimestamp;
+              },
+              get encodePlanPayload() {
+                return encodePlanPayload;
+              },
+              get encodeProviderSessionPayload() {
+                return encodeProviderSessionPayload;
+              },
+              get encodeProviderThreadPayload() {
+                return encodeProviderThreadPayload;
+              },
+              get encodeProviderTurnPayload() {
+                return encodeProviderTurnPayload;
+              },
+              get encodeRestartCancelledBackgroundWork() {
+                return encodeRestartCancelledBackgroundWork;
+              },
+              get encodeRunAttemptPayload() {
+                return encodeRunAttemptPayload;
+              },
+              get encodeRunOutput() {
+                return encodeRunOutput;
+              },
+              get encodeRunPayload() {
+                return encodeRunPayload;
+              },
+              get encodeRuntimeRequestPayload() {
+                return encodeRuntimeRequestPayload;
+              },
+              get encodeSubagentPayload() {
+                return encodeSubagentPayload;
+              },
+              get encodeThreadPayload() {
+                return encodeThreadPayload;
+              },
+              get encodeThreadUpdatedAt() {
+                return encodeThreadUpdatedAt;
+              },
+              get encodeTurnItemPayload() {
+                return encodeTurnItemPayload;
+              },
+              get getThread() {
+                return getThread;
+              },
+              get booleanInt() {
+                return booleanInt;
+              },
+              get nullableStringField() {
+                return nullableStringField;
+              },
+              get parseEncodedPayload() {
+                return parseEncodedPayload;
+              },
+              get stringField() {
+                return stringField;
+              },
+              get sql() {
+                return sql;
+              },
+              get timelineIndexes() {
+                return timelineIndexes;
+              },
+              get upsertProviderTurn() {
+                return upsertProviderTurn;
+              },
+              get writeThreadTouches() {
+                return writeThreadTouches;
+              },
+              get apply() {
+                return apply;
+              },
+              get isInlineWorkOutput() {
+                return isInlineWorkOutput;
+              },
+              get keepRecordedRunField() {
+                return keepRecordedRunField;
+              },
+              get keepRecordedRunOutput() {
+                return keepRecordedRunOutput;
+              },
+            })(event),
+          );
         },
         (effect, event) =>
           effect.pipe(
@@ -2684,14 +2692,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId: ThreadId,
       window: ProjectionWindow,
     ) {
-      return yield* bindRetainedWindowRows({
-        get sql() {
-          return sql;
-        },
-        get CONVERSATION_INDEX_EXCLUDED_TYPES() {
-          return CONVERSATION_INDEX_EXCLUDED_TYPES;
-        },
-      })(threadId, window) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindRetainedWindowRows({
+          get sql() {
+            return sql;
+          },
+          get CONVERSATION_INDEX_EXCLUDED_TYPES() {
+            return CONVERSATION_INDEX_EXCLUDED_TYPES;
+          },
+        })(threadId, window),
+      );
     });
 
     const turnItemMatch = (threadId: ThreadId, filter: ProjectionRecordFilter | undefined) => sql`
@@ -2816,119 +2826,121 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         fields?: ReadonlyArray<ProjectionRecordField>,
         filter?: ProjectionRecordFilter,
       ) {
-        return yield* bindReadCanonicalProjection({
-          get PROMPT_NARROWING_BLOCKING_FILTERS() {
-            return PROMPT_NARROWING_BLOCKING_FILTERS;
-          },
-          get ProjectionStoreReadError() {
-            return ProjectionStoreReadError;
-          },
-          get ProjectionStoreThreadNotFoundError() {
-            return ProjectionStoreThreadNotFoundError;
-          },
-          get commandTurnItems() {
-            return commandTurnItems;
-          },
-          get decodeCheckpointPayload() {
-            return decodeCheckpointPayload;
-          },
-          get decodeCheckpointScopePayload() {
-            return decodeCheckpointScopePayload;
-          },
-          get decodeContextHandoffPayload() {
-            return decodeContextHandoffPayload;
-          },
-          get decodeContextTransferPayload() {
-            return decodeContextTransferPayload;
-          },
-          get decodeMessagePayload() {
-            return decodeMessagePayload;
-          },
-          get decodeNodePayload() {
-            return decodeNodePayload;
-          },
-          get decodePlanJson() {
-            return decodePlanJson;
-          },
-          get decodeProviderSessionPayload() {
-            return decodeProviderSessionPayload;
-          },
-          get decodeProviderThreadPayload() {
-            return decodeProviderThreadPayload;
-          },
-          get decodeProviderTurnPayload() {
-            return decodeProviderTurnPayload;
-          },
-          get decodeRows() {
-            return decodeRows;
-          },
-          get decodeRunAttemptPayload() {
-            return decodeRunAttemptPayload;
-          },
-          get decodeRunPayload() {
-            return decodeRunPayload;
-          },
-          get decodeRuntimeRequestPayload() {
-            return decodeRuntimeRequestPayload;
-          },
-          get decodeSubagentPayload() {
-            return decodeSubagentPayload;
-          },
-          get decodeThreadPayload() {
-            return decodeThreadPayload;
-          },
-          get decodeTurnItemPayload() {
-            return decodeTurnItemPayload;
-          },
-          get encodeIdList() {
-            return encodeIdList;
-          },
-          get isProjectionStoreThreadNotFoundError() {
-            return isProjectionStoreThreadNotFoundError;
-          },
-          get matchesNothing() {
-            return matchesNothing;
-          },
-          get nullableStringField() {
-            return nullableStringField;
-          },
-          get runIdsSinceLastCompaction() {
-            return runIdsSinceLastCompaction;
-          },
-          get sortMessagesByTurnItemOrder() {
-            return sortMessagesByTurnItemOrder;
-          },
-          get sql() {
-            return sql;
-          },
-          get LIVE_NODES_INDEX() {
-            return LIVE_NODES_INDEX;
-          },
-          get nodesOwningProviderThreads() {
-            return nodesOwningProviderThreads;
-          },
-          get presentedShellRunId() {
-            return presentedShellRunId;
-          },
-          get retainedWindowRows() {
-            return retainedWindowRows;
-          },
-          get settledSubagent() {
-            return settledSubagent;
-          },
-          get threadColumn() {
-            return threadColumn;
-          },
-          get todoListOfSettledRun() {
-            return todoListOfSettledRun;
-          },
-          get turnItemMatch() {
-            return turnItemMatch;
-          },
-          get unsettledSubagentRowids() {
-            return unsettledSubagentRowids;
-          },
-        })(threadId, window, fields, filter) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindReadCanonicalProjection({
+            get PROMPT_NARROWING_BLOCKING_FILTERS() {
+              return PROMPT_NARROWING_BLOCKING_FILTERS;
+            },
+            get ProjectionStoreReadError() {
+              return ProjectionStoreReadError;
+            },
+            get ProjectionStoreThreadNotFoundError() {
+              return ProjectionStoreThreadNotFoundError;
+            },
+            get commandTurnItems() {
+              return commandTurnItems;
+            },
+            get decodeCheckpointPayload() {
+              return decodeCheckpointPayload;
+            },
+            get decodeCheckpointScopePayload() {
+              return decodeCheckpointScopePayload;
+            },
+            get decodeContextHandoffPayload() {
+              return decodeContextHandoffPayload;
+            },
+            get decodeContextTransferPayload() {
+              return decodeContextTransferPayload;
+            },
+            get decodeMessagePayload() {
+              return decodeMessagePayload;
+            },
+            get decodeNodePayload() {
+              return decodeNodePayload;
+            },
+            get decodePlanJson() {
+              return decodePlanJson;
+            },
+            get decodeProviderSessionPayload() {
+              return decodeProviderSessionPayload;
+            },
+            get decodeProviderThreadPayload() {
+              return decodeProviderThreadPayload;
+            },
+            get decodeProviderTurnPayload() {
+              return decodeProviderTurnPayload;
+            },
+            get decodeRows() {
+              return decodeRows;
+            },
+            get decodeRunAttemptPayload() {
+              return decodeRunAttemptPayload;
+            },
+            get decodeRunPayload() {
+              return decodeRunPayload;
+            },
+            get decodeRuntimeRequestPayload() {
+              return decodeRuntimeRequestPayload;
+            },
+            get decodeSubagentPayload() {
+              return decodeSubagentPayload;
+            },
+            get decodeThreadPayload() {
+              return decodeThreadPayload;
+            },
+            get decodeTurnItemPayload() {
+              return decodeTurnItemPayload;
+            },
+            get encodeIdList() {
+              return encodeIdList;
+            },
+            get isProjectionStoreThreadNotFoundError() {
+              return isProjectionStoreThreadNotFoundError;
+            },
+            get matchesNothing() {
+              return matchesNothing;
+            },
+            get nullableStringField() {
+              return nullableStringField;
+            },
+            get runIdsSinceLastCompaction() {
+              return runIdsSinceLastCompaction;
+            },
+            get sortMessagesByTurnItemOrder() {
+              return sortMessagesByTurnItemOrder;
+            },
+            get sql() {
+              return sql;
+            },
+            get LIVE_NODES_INDEX() {
+              return LIVE_NODES_INDEX;
+            },
+            get nodesOwningProviderThreads() {
+              return nodesOwningProviderThreads;
+            },
+            get presentedShellRunId() {
+              return presentedShellRunId;
+            },
+            get retainedWindowRows() {
+              return retainedWindowRows;
+            },
+            get settledSubagent() {
+              return settledSubagent;
+            },
+            get threadColumn() {
+              return threadColumn;
+            },
+            get todoListOfSettledRun() {
+              return todoListOfSettledRun;
+            },
+            get turnItemMatch() {
+              return turnItemMatch;
+            },
+            get unsettledSubagentRowids() {
+              return unsettledSubagentRowids;
+            },
+          })(threadId, window, fields, filter),
+        );
       },
       (effect, threadId, _window, _fields, _filter) =>
         effect.pipe(
@@ -2954,53 +2966,55 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         seenThreadIds: ReadonlySet<ThreadId>,
         window?: ProjectionWindow,
       ) {
-        return yield* bindReadProjection({
-          get ProjectionStoreReadError() {
-            return ProjectionStoreReadError;
-          },
-          get ProjectionStoreV2Error() {
-            return ProjectionStoreV2Error;
-          },
-          get activeLocalTurnItems() {
-            return activeLocalTurnItems;
-          },
-          get buildVisibleTurnItems() {
-            return buildVisibleTurnItems;
-          },
-          get encodeForkRunIds() {
-            return encodeForkRunIds;
-          },
-          get forkRunIdsJson() {
-            return forkRunIdsJson;
-          },
-          get getForkSourceRunIds() {
-            return getForkSourceRunIds;
-          },
-          get inheritedRunFork() {
-            return inheritedRunFork;
-          },
-          get isProjectionStoreReadError() {
-            return isProjectionStoreReadError;
-          },
-          get isProjectionStoreThreadNotFoundError() {
-            return isProjectionStoreThreadNotFoundError;
-          },
-          get readCanonicalProjection() {
-            return readCanonicalProjection;
-          },
-          get sql() {
-            return sql;
-          },
-          get withLocalVisibleTurnItems() {
-            return withLocalVisibleTurnItems;
-          },
-          get readProjection() {
-            return readProjection;
-          },
-          get retainedWindowRows() {
-            return retainedWindowRows;
-          },
-        })(threadId, seenThreadIds, window) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindReadProjection({
+            get ProjectionStoreReadError() {
+              return ProjectionStoreReadError;
+            },
+            get ProjectionStoreV2Error() {
+              return ProjectionStoreV2Error;
+            },
+            get activeLocalTurnItems() {
+              return activeLocalTurnItems;
+            },
+            get buildVisibleTurnItems() {
+              return buildVisibleTurnItems;
+            },
+            get encodeForkRunIds() {
+              return encodeForkRunIds;
+            },
+            get forkRunIdsJson() {
+              return forkRunIdsJson;
+            },
+            get getForkSourceRunIds() {
+              return getForkSourceRunIds;
+            },
+            get inheritedRunFork() {
+              return inheritedRunFork;
+            },
+            get isProjectionStoreReadError() {
+              return isProjectionStoreReadError;
+            },
+            get isProjectionStoreThreadNotFoundError() {
+              return isProjectionStoreThreadNotFoundError;
+            },
+            get readCanonicalProjection() {
+              return readCanonicalProjection;
+            },
+            get sql() {
+              return sql;
+            },
+            get withLocalVisibleTurnItems() {
+              return withLocalVisibleTurnItems;
+            },
+            get readProjection() {
+              return readProjection;
+            },
+            get retainedWindowRows() {
+              return retainedWindowRows;
+            },
+          })(threadId, seenThreadIds, window),
+        );
       },
       (effect, threadId, _seenThreadIds, _window) =>
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
@@ -3008,23 +3022,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
       function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
-        return yield* bindGetLimitRecoveryCandidates({
-          get ProjectionStoreSetupError() {
-            return ProjectionStoreSetupError;
-          },
-          get decodeThreadPayload() {
-            return decodeThreadPayload;
-          },
-          get decodeTurnItemPayload() {
-            return decodeTurnItemPayload;
-          },
-          get sql() {
-            return sql;
-          },
-          get booleanInt() {
-            return booleanInt;
-          },
-        })(options) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindGetLimitRecoveryCandidates({
+            get ProjectionStoreSetupError() {
+              return ProjectionStoreSetupError;
+            },
+            get decodeThreadPayload() {
+              return decodeThreadPayload;
+            },
+            get decodeTurnItemPayload() {
+              return decodeTurnItemPayload;
+            },
+            get sql() {
+              return sql;
+            },
+            get booleanInt() {
+              return booleanInt;
+            },
+          })(options),
+        );
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
@@ -3067,82 +3083,86 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly exclude?: ReadonlyArray<string>;
         },
       ) {
-        return yield* bindGetRecoveryThreadIds({
-          get ProjectionStoreSetupError() {
-            return ProjectionStoreSetupError;
-          },
-          get sql() {
-            return sql;
-          },
-          get LIVE_NODES_INDEX() {
-            return LIVE_NODES_INDEX;
-          },
-          get encodeIdList() {
-            return encodeIdList;
-          },
-        })(kind, projects) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindGetRecoveryThreadIds({
+            get ProjectionStoreSetupError() {
+              return ProjectionStoreSetupError;
+            },
+            get sql() {
+              return sql;
+            },
+            get LIVE_NODES_INDEX() {
+              return LIVE_NODES_INDEX;
+            },
+            get encodeIdList() {
+              return encodeIdList;
+            },
+          })(kind, projects),
+        );
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
     const getUnreadableThreadIds = Effect.fn("ProjectionStore.getUnreadableThreadIds")(
       function* () {
-        return yield* bindGetUnreadableThreadIds({
-          get ProjectionStoreSetupError() {
-            return ProjectionStoreSetupError;
-          },
-          get decodeCheckpointPayload() {
-            return decodeCheckpointPayload;
-          },
-          get decodeCheckpointScopePayload() {
-            return decodeCheckpointScopePayload;
-          },
-          get decodeContextHandoffPayload() {
-            return decodeContextHandoffPayload;
-          },
-          get decodeContextTransferPayload() {
-            return decodeContextTransferPayload;
-          },
-          get decodeMessagePayload() {
-            return decodeMessagePayload;
-          },
-          get decodeNodePayload() {
-            return decodeNodePayload;
-          },
-          get decodePlanJson() {
-            return decodePlanJson;
-          },
-          get decodeProviderSessionPayload() {
-            return decodeProviderSessionPayload;
-          },
-          get decodeProviderThreadPayload() {
-            return decodeProviderThreadPayload;
-          },
-          get decodeProviderTurnPayload() {
-            return decodeProviderTurnPayload;
-          },
-          get decodeRunAttemptPayload() {
-            return decodeRunAttemptPayload;
-          },
-          get decodeRunPayload() {
-            return decodeRunPayload;
-          },
-          get decodeRuntimeRequestPayload() {
-            return decodeRuntimeRequestPayload;
-          },
-          get decodeSubagentPayload() {
-            return decodeSubagentPayload;
-          },
-          get decodeThreadPayload() {
-            return decodeThreadPayload;
-          },
-          get decodeTurnItemPayload() {
-            return decodeTurnItemPayload;
-          },
-          get sql() {
-            return sql;
-          },
-        })() as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindGetUnreadableThreadIds({
+            get ProjectionStoreSetupError() {
+              return ProjectionStoreSetupError;
+            },
+            get decodeCheckpointPayload() {
+              return decodeCheckpointPayload;
+            },
+            get decodeCheckpointScopePayload() {
+              return decodeCheckpointScopePayload;
+            },
+            get decodeContextHandoffPayload() {
+              return decodeContextHandoffPayload;
+            },
+            get decodeContextTransferPayload() {
+              return decodeContextTransferPayload;
+            },
+            get decodeMessagePayload() {
+              return decodeMessagePayload;
+            },
+            get decodeNodePayload() {
+              return decodeNodePayload;
+            },
+            get decodePlanJson() {
+              return decodePlanJson;
+            },
+            get decodeProviderSessionPayload() {
+              return decodeProviderSessionPayload;
+            },
+            get decodeProviderThreadPayload() {
+              return decodeProviderThreadPayload;
+            },
+            get decodeProviderTurnPayload() {
+              return decodeProviderTurnPayload;
+            },
+            get decodeRunAttemptPayload() {
+              return decodeRunAttemptPayload;
+            },
+            get decodeRunPayload() {
+              return decodeRunPayload;
+            },
+            get decodeRuntimeRequestPayload() {
+              return decodeRuntimeRequestPayload;
+            },
+            get decodeSubagentPayload() {
+              return decodeSubagentPayload;
+            },
+            get decodeThreadPayload() {
+              return decodeThreadPayload;
+            },
+            get decodeTurnItemPayload() {
+              return decodeTurnItemPayload;
+            },
+            get sql() {
+              return sql;
+            },
+          })(),
+        );
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
@@ -3231,59 +3251,61 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getRuntimeRecoveryProjection: ProjectionStoreV2Shape["getRuntimeRecoveryProjection"] =
       Effect.fn("ProjectionStore.getRuntimeRecoveryProjection")(
         function* (threadId) {
-          return yield* bindGetRuntimeRecoveryProjection({
-            get ProjectionStoreReadError() {
-              return ProjectionStoreReadError;
-            },
-            get ProjectionStoreThreadNotFoundError() {
-              return ProjectionStoreThreadNotFoundError;
-            },
-            get decodeMessagePayload() {
-              return decodeMessagePayload;
-            },
-            get decodeNodePayload() {
-              return decodeNodePayload;
-            },
-            get decodeProviderSessionPayload() {
-              return decodeProviderSessionPayload;
-            },
-            get decodeProviderThreadPayload() {
-              return decodeProviderThreadPayload;
-            },
-            get decodeProviderTurnPayload() {
-              return decodeProviderTurnPayload;
-            },
-            get decodeRows() {
-              return decodeRows;
-            },
-            get decodeRunAttemptPayload() {
-              return decodeRunAttemptPayload;
-            },
-            get decodeRunPayload() {
-              return decodeRunPayload;
-            },
-            get decodeRuntimeRequestPayload() {
-              return decodeRuntimeRequestPayload;
-            },
-            get decodeSubagentPayload() {
-              return decodeSubagentPayload;
-            },
-            get decodeThreadPayload() {
-              return decodeThreadPayload;
-            },
-            get decodeTurnItemPayload() {
-              return decodeTurnItemPayload;
-            },
-            get isProjectionStoreThreadNotFoundError() {
-              return isProjectionStoreThreadNotFoundError;
-            },
-            get sql() {
-              return sql;
-            },
-            get LIVE_NODES_INDEX() {
-              return LIVE_NODES_INDEX;
-            },
-          })(threadId) as Effect.Effect<any, never, never>;
+          return yield* yieldNativeSplit(
+            bindGetRuntimeRecoveryProjection({
+              get ProjectionStoreReadError() {
+                return ProjectionStoreReadError;
+              },
+              get ProjectionStoreThreadNotFoundError() {
+                return ProjectionStoreThreadNotFoundError;
+              },
+              get decodeMessagePayload() {
+                return decodeMessagePayload;
+              },
+              get decodeNodePayload() {
+                return decodeNodePayload;
+              },
+              get decodeProviderSessionPayload() {
+                return decodeProviderSessionPayload;
+              },
+              get decodeProviderThreadPayload() {
+                return decodeProviderThreadPayload;
+              },
+              get decodeProviderTurnPayload() {
+                return decodeProviderTurnPayload;
+              },
+              get decodeRows() {
+                return decodeRows;
+              },
+              get decodeRunAttemptPayload() {
+                return decodeRunAttemptPayload;
+              },
+              get decodeRunPayload() {
+                return decodeRunPayload;
+              },
+              get decodeRuntimeRequestPayload() {
+                return decodeRuntimeRequestPayload;
+              },
+              get decodeSubagentPayload() {
+                return decodeSubagentPayload;
+              },
+              get decodeThreadPayload() {
+                return decodeThreadPayload;
+              },
+              get decodeTurnItemPayload() {
+                return decodeTurnItemPayload;
+              },
+              get isProjectionStoreThreadNotFoundError() {
+                return isProjectionStoreThreadNotFoundError;
+              },
+              get sql() {
+                return sql;
+              },
+              get LIVE_NODES_INDEX() {
+                return LIVE_NODES_INDEX;
+              },
+            })(threadId),
+          );
         },
         (effect, threadId) =>
           effect.pipe(
@@ -4224,47 +4246,49 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       "ProjectionStore.readTimelineIndex",
     )(
       function* (threadId: ThreadId, seen: ReadonlySet<ThreadId>, includeAttempts = false) {
-        return yield* bindReadTimelineIndex({
-          get ProjectionStoreReadError() {
-            return ProjectionStoreReadError;
-          },
-          get ProjectionStoreV2Error() {
-            return ProjectionStoreV2Error;
-          },
-          get createInheritedTurnItemVisibility() {
-            return createInheritedTurnItemVisibility;
-          },
-          get forkMemberRunOrdinals() {
-            return forkMemberRunOrdinals;
-          },
-          get getForkSourceRunIds() {
-            return getForkSourceRunIds;
-          },
-          get getThreadRecords() {
-            return getThreadRecords;
-          },
-          get inheritedRunFork() {
-            return inheritedRunFork;
-          },
-          get isProjectionStoreReadError() {
-            return isProjectionStoreReadError;
-          },
-          get isProjectionStoreThreadNotFoundError() {
-            return isProjectionStoreThreadNotFoundError;
-          },
-          get isTurnItemAtOrBeforeRun() {
-            return isTurnItemAtOrBeforeRun;
-          },
-          get makeForkMarkerTurnItem() {
-            return makeForkMarkerTurnItem;
-          },
-          get sql() {
-            return sql;
-          },
-          get readTimelineIndex() {
-            return readTimelineIndex;
-          },
-        })(threadId, seen, includeAttempts) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindReadTimelineIndex({
+            get ProjectionStoreReadError() {
+              return ProjectionStoreReadError;
+            },
+            get ProjectionStoreV2Error() {
+              return ProjectionStoreV2Error;
+            },
+            get createInheritedTurnItemVisibility() {
+              return createInheritedTurnItemVisibility;
+            },
+            get forkMemberRunOrdinals() {
+              return forkMemberRunOrdinals;
+            },
+            get getForkSourceRunIds() {
+              return getForkSourceRunIds;
+            },
+            get getThreadRecords() {
+              return getThreadRecords;
+            },
+            get inheritedRunFork() {
+              return inheritedRunFork;
+            },
+            get isProjectionStoreReadError() {
+              return isProjectionStoreReadError;
+            },
+            get isProjectionStoreThreadNotFoundError() {
+              return isProjectionStoreThreadNotFoundError;
+            },
+            get isTurnItemAtOrBeforeRun() {
+              return isTurnItemAtOrBeforeRun;
+            },
+            get makeForkMarkerTurnItem() {
+              return makeForkMarkerTurnItem;
+            },
+            get sql() {
+              return sql;
+            },
+            get readTimelineIndex() {
+              return readTimelineIndex;
+            },
+          })(threadId, seen, includeAttempts),
+        );
       },
       (effect, threadId, _seen) =>
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
@@ -4397,32 +4421,34 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId: ThreadId,
       includePersistentOutput = false,
     ) {
-      return yield* bindOpenLocalTimeline({
-        get getThreadRecords() {
-          return getThreadRecords;
-        },
-        get inheritedRunFork() {
-          return inheritedRunFork;
-        },
-        get latestThreadEventSequence() {
-          return latestThreadEventSequence;
-        },
-        get readTimelineWindow() {
-          return readTimelineWindow;
-        },
-        get sql() {
-          return sql;
-        },
-        get timelineIndexes() {
-          return timelineIndexes;
-        },
-        get CONVERSATION_INDEX_EXCLUDED_TYPES() {
-          return CONVERSATION_INDEX_EXCLUDED_TYPES;
-        },
-        get encodeIdList() {
-          return encodeIdList;
-        },
-      })(threadId, includePersistentOutput) as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindOpenLocalTimeline({
+          get getThreadRecords() {
+            return getThreadRecords;
+          },
+          get inheritedRunFork() {
+            return inheritedRunFork;
+          },
+          get latestThreadEventSequence() {
+            return latestThreadEventSequence;
+          },
+          get readTimelineWindow() {
+            return readTimelineWindow;
+          },
+          get sql() {
+            return sql;
+          },
+          get timelineIndexes() {
+            return timelineIndexes;
+          },
+          get CONVERSATION_INDEX_EXCLUDED_TYPES() {
+            return CONVERSATION_INDEX_EXCLUDED_TYPES;
+          },
+          get encodeIdList() {
+            return encodeIdList;
+          },
+        })(threadId, includePersistentOutput),
+      );
     });
     type LocalTimeline = NonNullable<Effect.Success<ReturnType<typeof openLocalTimeline>>>;
     type IndexedTimelineRow = TimelineIndexRow & {
@@ -4523,26 +4549,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           prefix?: ThreadHistoryPrefix,
         ) => Effect.Effect<any, ProjectionStoreV2Error>,
       ) {
-        return yield* bindSelectHistoryPageInWindow({
-          get ProjectionStoreV2Error() {
-            return ProjectionStoreV2Error;
-          },
-          get encodeIdList() {
-            return encodeIdList;
-          },
-          get localTimelineRow() {
-            return localTimelineRow;
-          },
-          get olderUserTurn() {
-            return olderUserTurn;
-          },
-          get runsStartedBefore() {
-            return runsStartedBefore;
-          },
-          get sql() {
-            return sql;
-          },
-        })(local, input, select) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindSelectHistoryPageInWindow({
+            get ProjectionStoreV2Error() {
+              return ProjectionStoreV2Error;
+            },
+            get encodeIdList() {
+              return encodeIdList;
+            },
+            get localTimelineRow() {
+              return localTimelineRow;
+            },
+            get olderUserTurn() {
+              return olderUserTurn;
+            },
+            get runsStartedBefore() {
+              return runsStartedBefore;
+            },
+            get sql() {
+              return sql;
+            },
+          })(local, input, select),
+        );
       },
     );
 
@@ -5228,38 +5256,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ReadonlyArray<OrchestrationV2TurnItem>
         >;
       }) {
-        return yield* bindShellThreadStateFromRow({
-          get activeProviderGoalForShell() {
-            return activeProviderGoalForShell;
-          },
-          get decodeForkRunIds() {
-            return decodeForkRunIds;
-          },
-          get decodeRuntimeRequestPayload() {
-            return decodeRuntimeRequestPayload;
-          },
-          get decodeThreadPayload() {
-            return decodeThreadPayload;
-          },
-          get decodeTurnItemPayload() {
-            return decodeTurnItemPayload;
-          },
-          get linkCardStillAsks() {
-            return linkCardStillAsks;
-          },
-          get pendingRuntimeRequestSummary() {
-            return pendingRuntimeRequestSummary;
-          },
-          get providerInstanceHistoryForShell() {
-            return providerInstanceHistoryForShell;
-          },
-          get secretRequestAsPendingInput() {
-            return secretRequestAsPendingInput;
-          },
-          get shellStatusFromStoredRunStatus() {
-            return shellStatusFromStoredRunStatus;
-          },
-        })(input) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindShellThreadStateFromRow({
+            get activeProviderGoalForShell() {
+              return activeProviderGoalForShell;
+            },
+            get decodeForkRunIds() {
+              return decodeForkRunIds;
+            },
+            get decodeRuntimeRequestPayload() {
+              return decodeRuntimeRequestPayload;
+            },
+            get decodeThreadPayload() {
+              return decodeThreadPayload;
+            },
+            get decodeTurnItemPayload() {
+              return decodeTurnItemPayload;
+            },
+            get linkCardStillAsks() {
+              return linkCardStillAsks;
+            },
+            get pendingRuntimeRequestSummary() {
+              return pendingRuntimeRequestSummary;
+            },
+            get providerInstanceHistoryForShell() {
+              return providerInstanceHistoryForShell;
+            },
+            get secretRequestAsPendingInput() {
+              return secretRequestAsPendingInput;
+            },
+            get shellStatusFromStoredRunStatus() {
+              return shellStatusFromStoredRunStatus;
+            },
+          })(input),
+        );
       });
 
     const shellSnapshotReadError = (cause: unknown) =>
@@ -5439,29 +5469,31 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getAgentAwarenessSnapshot = Effect.fn("ProjectionStore.getAgentAwarenessSnapshot")(
       function* (threadId?: ThreadId) {
-        return yield* bindGetAgentAwarenessSnapshot({
-          get pendingBackgroundDataByThreadId() {
-            return pendingBackgroundDataByThreadId;
-          },
-          get selectShellPendingTurnItemRows() {
-            return selectShellPendingTurnItemRows;
-          },
-          get selectShellProviderThreadRows() {
-            return selectShellProviderThreadRows;
-          },
-          get selectShellThreadRows() {
-            return selectShellThreadRows;
-          },
-          get shellSnapshotReadError() {
-            return shellSnapshotReadError;
-          },
-          get shellThreadStateFromRow() {
-            return shellThreadStateFromRow;
-          },
-          get sql() {
-            return sql;
-          },
-        })(threadId) as Effect.Effect<any, never, never>;
+        return yield* yieldNativeSplit(
+          bindGetAgentAwarenessSnapshot({
+            get pendingBackgroundDataByThreadId() {
+              return pendingBackgroundDataByThreadId;
+            },
+            get selectShellPendingTurnItemRows() {
+              return selectShellPendingTurnItemRows;
+            },
+            get selectShellProviderThreadRows() {
+              return selectShellProviderThreadRows;
+            },
+            get selectShellThreadRows() {
+              return selectShellThreadRows;
+            },
+            get shellSnapshotReadError() {
+              return shellSnapshotReadError;
+            },
+            get shellThreadStateFromRow() {
+              return shellThreadStateFromRow;
+            },
+            get sql() {
+              return sql;
+            },
+          })(threadId),
+        );
       },
       Effect.mapError(shellSnapshotReadError),
     );
@@ -5503,23 +5535,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       "INDEXED BY orchestration_v2_projection_turn_items_shell_pending_idx",
     );
     const listActiveShellIndex = Effect.fn("ProjectionStore.listActiveShellIndex")(function* () {
-      return yield* bindListActiveShellIndex({
-        get shellIndexLineage() {
-          return shellIndexLineage;
-        },
-        get shellSnapshotReadError() {
-          return shellSnapshotReadError;
-        },
-        get sql() {
-          return sql;
-        },
-        get PENDING_ITEMS_INDEX() {
-          return PENDING_ITEMS_INDEX;
-        },
-        get indexedField() {
-          return indexedField;
-        },
-      })() as Effect.Effect<any, never, never>;
+      return yield* yieldNativeSplit(
+        bindListActiveShellIndex({
+          get shellIndexLineage() {
+            return shellIndexLineage;
+          },
+          get shellSnapshotReadError() {
+            return shellSnapshotReadError;
+          },
+          get sql() {
+            return sql;
+          },
+          get PENDING_ITEMS_INDEX() {
+            return PENDING_ITEMS_INDEX;
+          },
+          get indexedField() {
+            return indexedField;
+          },
+        })(),
+      );
     }, Effect.mapError(shellSnapshotReadError));
 
     const listActiveThreads = Effect.fn("ProjectionStore.listActiveThreads")(function* (

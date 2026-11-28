@@ -42,6 +42,9 @@ it("writes a src overlay whose extends path is not the overlay file", () => {
   expect(script).toContain("#t3/mcp-session-registry");
   expect(script).toContain("McpSessionRegistry.native.ts");
   expect(script).toContain("scriptcIsland.ts");
+  expect(script).toContain('"@t3tools/contracts/orchestrationV2"');
+  expect(script).toContain('"@t3tools/contracts/baseSchemas"');
+  expect(script).toContain('"@t3tools/contracts/applicationEvent"');
   expect(script).toContain("scriptc-stubs/OpenCodeRuntime.ts");
   expect(script).toContain("scriptc-native-schema-stub");
   expect(script).toContain("effect-codex-app-server/schema");
@@ -74,6 +77,22 @@ it("native scriptc entry does not import the contracts barrel or server.ts", () 
   expect(intake).not.toContain("../auth/RpcAuthorization");
   expect(intake).not.toContain("../orchestration-v2/ThreadMessageIntake");
   expect(intake).not.toContain("effect/rpc");
+  const eventStore = NodeFS.readFileSync(
+    new URL("../src/orchestration-v2/EventStore.ts", import.meta.url),
+    "utf8",
+  );
+  expect(eventStore).not.toContain('@t3tools/contracts"');
+  expect(eventStore).not.toContain("@t3tools/contracts'");
+  expect(eventStore).toContain("@t3tools/contracts/orchestrationV2");
+  expect(eventStore).toContain("@t3tools/contracts/baseSchemas");
+  expect(eventStore).toContain("@t3tools/contracts/applicationEvent");
+  const persistence = NodeFS.readFileSync(
+    new URL("../src/persistence/OrchestrationEventStore.ts", import.meta.url),
+    "utf8",
+  );
+  expect(persistence).not.toContain('@t3tools/contracts"');
+  expect(persistence).not.toContain("@t3tools/contracts'");
+  expect(persistence).toContain("@t3tools/contracts/orchestrationV2");
 });
 
 it("copies Node sidecar workers next to the native binary", () => {

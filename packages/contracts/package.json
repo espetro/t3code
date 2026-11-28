@@ -38,6 +38,42 @@
     "./baseSchemas": {
       "types": "./src/baseSchemas.ts",
       "import": "./src/baseSchemas.ts"
+    },
+    "./issue": {
+      "types": "./src/issue.ts",
+      "import": "./src/issue.ts"
+    },
+    "./guestShare": {
+      "types": "./src/guestShare.ts",
+      "import": "./src/guestShare.ts"
+    },
+    "./chatAttachment": {
+      "types": "./src/chatAttachment.ts",
+      "import": "./src/chatAttachment.ts"
+    },
+    "./modelSelection": {
+      "types": "./src/modelSelection.ts",
+      "import": "./src/modelSelection.ts"
+    },
+    "./providerInstance": {
+      "types": "./src/providerInstance.ts",
+      "import": "./src/providerInstance.ts"
+    },
+    "./providerPolicy": {
+      "types": "./src/providerPolicy.ts",
+      "import": "./src/providerPolicy.ts"
+    },
+    "./managedPolicy": {
+      "types": "./src/managedPolicy.ts",
+      "import": "./src/managedPolicy.ts"
+    },
+    "./threadPullRequest": {
+      "types": "./src/threadPullRequest.ts",
+      "import": "./src/threadPullRequest.ts"
+    },
+    "./project": {
+      "types": "./src/project.ts",
+      "import": "./src/project.ts"
     }
   },
   "scripts": {

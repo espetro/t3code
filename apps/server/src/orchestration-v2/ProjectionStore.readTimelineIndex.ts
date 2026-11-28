@@ -5,7 +5,8 @@
 // its scope as `ctx` and this module returns the original Effect.fn.
 import { pickScriptcBindCtx } from "./scriptcBindScope.ts";
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
-import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
+import { applyOrchestrationV2ThreadVisit } from "@t3tools/contracts/orchestrationV2";
+import { pendingGuestMessageCount } from "@t3tools/contracts/guestShare";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -17,7 +18,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/orchestrationV2";
 import {
   latestRootProviderFailure,
   latestUnheldRun,
@@ -38,7 +39,6 @@ import type {
   OrchestrationV2ExecutionNode,
   OrchestrationV2PlanArtifact,
   OrchestrationV2PendingRuntimeRequestSummary,
-  PlanId,
   OrchestrationV2ConversationMessage,
   OrchestrationV2ContextTransfer,
   OrchestrationV2DomainEvent,
@@ -55,11 +55,14 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+} from "@t3tools/contracts/orchestrationV2";
+import type {
+  PlanId,
   GuestShareId,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
 import {
   IDLE_COMPACTION_TEXT,
   idleCompactionOf,
@@ -81,6 +84,8 @@ import {
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
   orchestrationV2RunWorkStartedAt,
+} from "@t3tools/contracts/orchestrationV2";
+import {
   RunId,
   MessageId,
   RuntimeRequestId,
@@ -91,8 +96,8 @@ import {
   TurnItemId,
   NodeId,
   ProjectId,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/baseSchemas";
+import { ProviderInstanceId } from "@t3tools/contracts/providerInstance";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import {
   deriveBlockedOnThreadWait,
